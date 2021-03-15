@@ -25,6 +25,7 @@ common_ss.add(when: 'CONFIG_SPLIT_IRQ', if_true: files('split-irq.c'))
 common_ss.add(when: 'CONFIG_XILINX_AXI', if_true: files('stream.c'))
 
 softmmu_ss.add(files(
+  'dtb-machine.c',
   'fw-path-provider.c',
   'loader.c',
   'machine-hmp-cmds.c',
