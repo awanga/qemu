@@ -135,7 +135,7 @@ int fdt_simple_addr_size(const void *fdt, int nodeoffset, int idx,
     return 0;
 }
 
-static int add_dev_fdt_mapping(DynamicState *state, DeviceState *dev,
+static int add_dev_fdt_mapping(DynamicState *s, DeviceState *dev,
                                       int node_offset)
 {
     struct device_fdt_mapping *node =
@@ -143,15 +143,14 @@ static int add_dev_fdt_mapping(DynamicState *state, DeviceState *dev,
 
     node->dev = dev;
     node->offset = node_offset;
-    node->next = state->mapping;
-    state->mapping = node;
+    node->next = s->mapping;
+    s->mapping = node;
     return 0;
 }
 
-static struct DeviceState *find_dev_fdt_mapping(
-                                    DynamicState *state, int node)
+static struct DeviceState *find_dev_fdt_mapping(DynamicState *s, int node)
 {
-    struct device_fdt_mapping *head = state->mapping;
+    struct device_fdt_mapping *head = s->mapping;
 
     while (head != NULL) {
         if (head->offset == node) {
@@ -162,16 +161,16 @@ static struct DeviceState *find_dev_fdt_mapping(
     return NULL;
 }
 
-static DeviceState *machine_dtb_add_clocksource(DynamicState *state,
+static DeviceState *machine_dtb_add_clocksource(DynamicState *s,
                 DeviceState *parent_dev, const void *fdt, int node)
 {
     DeviceState *dev = NULL;
-    /* TODO: add pci bus code here */
+    /* TODO: add clocksource code here */
     pr_debug("adding %s as clocksource", fdt_get_name(fdt, node, NULL));
     return dev;
 }
 
-static DeviceState *machine_dtb_add_pci_bus(DynamicState *state,
+static DeviceState *machine_dtb_add_pci_bus(DynamicState *s,
                 DeviceState *parent_dev, const void *fdt, int node)
 {
     DeviceState *dev = NULL;
@@ -180,7 +179,7 @@ static DeviceState *machine_dtb_add_pci_bus(DynamicState *state,
     return dev;
 }
 
-static DeviceState *machine_dtb_add_peripheral_bus(DynamicState *state,
+static DeviceState *machine_dtb_add_peripheral_bus(DynamicState *s,
                 DeviceState *parent_dev, const void *fdt, int node)
 {
     DeviceState *dev = NULL;
@@ -189,7 +188,7 @@ static DeviceState *machine_dtb_add_peripheral_bus(DynamicState *state,
     return dev;
 }
 
-static DeviceState *machine_dtb_add_generic_bus(DynamicState *state,
+static DeviceState *machine_dtb_add_generic_bus(DynamicState *s,
                 DeviceState *parent_dev, const void *fdt, int node)
 {
     DeviceState *dev = NULL;
@@ -198,7 +197,7 @@ static DeviceState *machine_dtb_add_generic_bus(DynamicState *state,
     return dev;
 }
 
-static DeviceState *machine_dtb_add_intr_controller(DynamicState *state,
+static DeviceState *machine_dtb_add_intr_controller(DynamicState *s,
                 DeviceState *parent_dev, const void *fdt, int node)
 {
     DeviceState *dev = NULL;
@@ -208,7 +207,7 @@ static DeviceState *machine_dtb_add_intr_controller(DynamicState *state,
     return dev;
 }
 
-static DeviceState *machine_dtb_add_gpio_controller(DynamicState *state,
+static DeviceState *machine_dtb_add_gpio_controller(DynamicState *s,
                 DeviceState *parent_dev, const void *fdt, int node)
 {
     DeviceState *dev = NULL;
@@ -217,7 +216,7 @@ static DeviceState *machine_dtb_add_gpio_controller(DynamicState *state,
     return dev;
 }
 
-static DeviceState *machine_dtb_add_simple_device(DynamicState *state,
+static DeviceState *machine_dtb_add_simple_device(DynamicState *s,
                 DeviceState *parent_dev, const void *fdt, int node)
 {
     DeviceState *dev = NULL;
@@ -255,7 +254,7 @@ static DeviceState *machine_dtb_add_simple_device(DynamicState *state,
     return dev;
 }
 
-static DeviceState *machine_dtb_add_dummy_device(DynamicState *state,
+static DeviceState *machine_dtb_add_dummy_device(DynamicState *s,
                 DeviceState *parent_dev, const void *fdt, int node)
 {
     DeviceState *dev = NULL;
@@ -263,7 +262,7 @@ static DeviceState *machine_dtb_add_dummy_device(DynamicState *state,
     return dev;
 }
 
-static DeviceState *machine_dtb_add_device_node(DynamicState *state,
+static DeviceState *machine_dtb_add_device_node(DynamicState *s,
                 DeviceState *parent_dev, const void *fdt, int node)
 {
     DeviceState *dev = NULL;
@@ -277,13 +276,13 @@ static DeviceState *machine_dtb_add_device_node(DynamicState *state,
 
         /* check for pci bus */
         if (strncmp(dev_type, "pci", 3) == 0) {
-            dev = machine_dtb_add_pci_bus(state, parent_dev, fdt, node);
+            dev = machine_dtb_add_pci_bus(s, parent_dev, fdt, node);
             goto done;
         }
 
         /* check for soc (generic) busses */
         if (strncmp(dev_type, "soc", 3) == 0) {
-            dev = machine_dtb_add_generic_bus(state, parent_dev, fdt, node);
+            dev = machine_dtb_add_generic_bus(s, parent_dev, fdt, node);
             goto done;
         }
     }
@@ -295,7 +294,7 @@ static DeviceState *machine_dtb_add_device_node(DynamicState *state,
 
         /* check for generic busses */
         if (has_ranges) {
-            dev = machine_dtb_add_generic_bus(state, parent_dev, fdt, node);
+            dev = machine_dtb_add_generic_bus(s, parent_dev, fdt, node);
             goto done;
         }
 
@@ -310,7 +309,7 @@ static DeviceState *machine_dtb_add_device_node(DynamicState *state,
                  strstr(node_name, "i2c") != NULL) ||
                 (strstr(compat, "spi") != NULL &&
                  strstr(node_name, "spi") != NULL)) {
-                dev = machine_dtb_add_peripheral_bus(state,
+                dev = machine_dtb_add_peripheral_bus(s,
                                         parent_dev, fdt, node);
                 goto done;
             }
@@ -319,28 +318,28 @@ static DeviceState *machine_dtb_add_device_node(DynamicState *state,
 
     /* check for gpio/interrupt controller device (must check gpio first!) */
     if (fdt_getprop(fdt, node, "gpio-controller", NULL) > 0) {
-        dev = machine_dtb_add_gpio_controller(state, parent_dev, fdt, node);
+        dev = machine_dtb_add_gpio_controller(s, parent_dev, fdt, node);
         goto done;
     }
     if (fdt_getprop(fdt, node, "interrupt-controller", NULL) > 0) {
-        dev = machine_dtb_add_intr_controller(state, parent_dev, fdt, node);
+        dev = machine_dtb_add_intr_controller(s, parent_dev, fdt, node);
         goto done;
     }
 
     /* special case: check for "clock-cells" property */
     if (fdt_getprop(fdt, node, "#clock-cells", NULL) > 0) {
-        dev = machine_dtb_add_clocksource(state, parent_dev, fdt, node);
+        dev = machine_dtb_add_clocksource(s, parent_dev, fdt, node);
         goto done;
     }
 
     /* try to instantiate "regular" device node using compatible string */
     if (!dev) {
-        dev = machine_dtb_add_simple_device(state, parent_dev, fdt, node);
+        dev = machine_dtb_add_simple_device(s, parent_dev, fdt, node);
     }
 
     if (!dev) {
         /* fallback: try to create dummy device */
-        dev = machine_dtb_add_dummy_device(state, parent_dev, fdt, node);
+        dev = machine_dtb_add_dummy_device(s, parent_dev, fdt, node);
         if (!dev) {
             pr_debug("No device created for node %s", node_name);
             return NULL;
@@ -348,18 +347,18 @@ static DeviceState *machine_dtb_add_device_node(DynamicState *state,
     }
 
 done:
-    add_dev_fdt_mapping(state, dev, node);
+    add_dev_fdt_mapping(s, dev, node);
     return dev;
 }
 
-static int machine_dtb_scan_node(DynamicState *state, DeviceState *parent,
+static int machine_dtb_scan_node(DynamicState *s, DeviceState *parent,
                                  const void *fdt, int node)
 {
     DeviceState *dev = NULL;
     int cnt, subnode;
 
     /* sanity check: has this node been scanned already? */
-    if (find_dev_fdt_mapping(state, node) != NULL) {
+    if (find_dev_fdt_mapping(s, node) != NULL) {
         /* TODO: ensure connectivity to parent device */
         return 0;
     }
@@ -369,14 +368,14 @@ static int machine_dtb_scan_node(DynamicState *state, DeviceState *parent,
     if (cnt > 0) {
 
         /* add device to machine */
-        dev = machine_dtb_add_device_node(state, parent, fdt, node);
+        dev = machine_dtb_add_device_node(s, parent, fdt, node);
     }
 
     fdt_for_each_subnode(subnode, fdt, node) {
         const char *node_name = fdt_get_name(fdt, subnode, NULL);
 
         /* recursively search subnodes */
-        machine_dtb_scan_node(state, dev, fdt,
+        machine_dtb_scan_node(s, dev, fdt,
                 fdt_subnode_offset(fdt, node, node_name));
     }
 
@@ -402,16 +401,16 @@ static int machine_load_device_tree(const char *dtb_filename, void **fdt_ptr)
 
 static void machine_dtb_parse_init(MachineState *mch)
 {
-    DynamicState *state = g_new(DynamicState, 1);
+    DynamicState *s = g_new(DynamicState, 1);
     MemoryRegion *ram = g_new(MemoryRegion, 1);
     Error *err = NULL;
     void *fdt = NULL;
     uint64_t reg_addr, reg_size;
     int len, offset, cpu_node;
 
-    state->mapping = NULL;
-    state->mch = mch;
-    state->ram = ram;
+    s->mapping = NULL;
+    s->mch = mch;
+    s->ram = ram;
 
     /* load the device tree with some checking */
     if (!mch->dtb) {
@@ -424,12 +423,12 @@ static void machine_dtb_parse_init(MachineState *mch)
     }
 
     /* get model name from dtb */
-    state->model_name =
+    s->model_name =
         g_strdup((const char *)qemu_fdt_getprop(fdt, "/", "model", &len, &err));
-    pr_debug("Scanning Device Tree for %s...\n", state->model_name);
+    pr_debug("Scanning Device Tree for %s...\n", s->model_name);
 
     /* identify and init the cpu(s) */
-    state->ncpus = 0;
+    s->ncpus = 0;
 
     /* look for cpu node in device tree */
     cpu_node = fdt_subnode_offset(fdt, 0, DTB_CPU_NODE);
@@ -441,8 +440,8 @@ static void machine_dtb_parse_init(MachineState *mch)
         }
 
         /* no CPU node found - try to use information passed to QEMU */
-        state->cpu[0] = cpu_create(mch->cpu_type);
-        if (!state->cpu[0]) {
+        s->cpu[0] = cpu_create(mch->cpu_type);
+        if (!s->cpu[0]) {
             error_report("No CPU node found. Could not manually init CPU %s",
                     mch->cpu_type);
             exit(1);
@@ -454,7 +453,7 @@ static void machine_dtb_parse_init(MachineState *mch)
          *        without cpus node use case is worth implementing
          */
         pr_debug("No CPU node found. Setting CPU to %s", mch->cpu_type);
-        state->ncpus++;
+        s->ncpus++;
     } else {
         /* scan for cpus */
         fdt_for_each_subnode(offset, fdt, cpu_node) {
@@ -480,21 +479,21 @@ static void machine_dtb_parse_init(MachineState *mch)
             }
 
             /* create cpu using compatible string */
-            state->cpu[state->ncpus] = cpu_create(cpu_type);
-            if (!state->cpu[state->ncpus]) {
+            s->cpu[s->ncpus] = cpu_create(cpu_type);
+            if (!s->cpu[s->ncpus]) {
                 /* try stripping manufacturer from cpu type */
                 const char *cpu_type_model = str_fdt_compat_strip(cpu_type);
 
                 if (cpu_type_model) {
-                    state->cpu[state->ncpus] = cpu_create(cpu_type_model);
+                    s->cpu[s->ncpus] = cpu_create(cpu_type_model);
                 }
 
-                if (!cpu_type_model || !state->cpu[state->ncpus]) {
+                if (!cpu_type_model || !s->cpu[s->ncpus]) {
                     error_report("Unable to initialize CPU");
                     exit(1);
                 }
             }
-            state->ncpus++;
+            s->ncpus++;
         }
     }
 
@@ -521,7 +520,7 @@ static void machine_dtb_parse_init(MachineState *mch)
             strcmp(node_name, DTB_MEM_NODE) == 0)
             continue;
 
-        machine_dtb_scan_node(state, NULL, fdt,
+        machine_dtb_scan_node(s, NULL, fdt,
             fdt_subnode_offset(fdt, 0, node_name));
     }
 
