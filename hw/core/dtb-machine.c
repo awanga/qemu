@@ -35,6 +35,7 @@ typedef struct {
     MachineState *mch;
     MemoryRegion *ram;
     CPUState *cpu[DTB_PARSE_MAX_NUM_CPUS];
+    SysBusDevice *busdev;
 
     const char *model_name;
     unsigned ncpus;
@@ -220,9 +221,11 @@ static DeviceState *machine_dtb_add_simple_device(DynamicState *s,
                 DeviceState *parent_dev, const void *fdt, int node)
 {
     DeviceState *dev = NULL;
-    pr_debug("adding %s as simple device", fdt_get_name(fdt, node, NULL));
+    SysBusDevice *busdev;
     uint64_t reg_addr, reg_size;
     unsigned i, compat_num;
+
+    pr_debug("adding %s as simple device", fdt_get_name(fdt, node, NULL));
 
     /* try to instantiate "regular" device node using compatible string */
     compat_num = fdt_stringlist_count(fdt, node, DTB_PROP_COMPAT);
@@ -231,14 +234,17 @@ static DeviceState *machine_dtb_add_simple_device(DynamicState *s,
                                 DTB_PROP_COMPAT, i, NULL);
 
         /* strip manufacturer and try to create new device */
-        /*
-         * dev = qdev_try_new(str_fdt_compat_strip(compat));
-         * if (dev) {
-         *     pr_debug("creating device %s", str_fdt_compat_strip(compat));
-         *     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
-         *     break;
-         * }
-         */
+        dev = qdev_try_new(str_fdt_compat_strip(compat));
+        if (dev) {
+            if (parent_dev) {
+                busdev = SYS_BUS_DEVICE(parent_dev);
+            } else {
+                busdev = s->busdev;
+            }
+            pr_debug("creating device %s", str_fdt_compat_strip(compat));
+            sysbus_realize_and_unref(busdev, &error_fatal);
+            break;
+        }
     }
 
     if (!dev) {
@@ -248,7 +254,7 @@ static DeviceState *machine_dtb_add_simple_device(DynamicState *s,
     /* add memory region when reg property exists */
     fdt_for_each_reg_prop(i, fdt, node, &reg_addr, &reg_size) {
         pr_debug("adding mmio region %llx", reg_addr);
-        sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, reg_addr);
+        sysbus_mmio_map(busdev, i, reg_addr);
     }
 
     return dev;
@@ -496,6 +502,7 @@ static void machine_dtb_parse_init(MachineState *mch)
             s->ncpus++;
         }
     }
+    s->busdev = SYS_BUS_DEVICE(s->cpu[0]);
 
     /* get system memory size */
     fdt_simple_addr_size(fdt, fdt_subnode_offset(fdt, 0, DTB_MEM_NODE),
