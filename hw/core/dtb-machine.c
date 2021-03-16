@@ -23,6 +23,7 @@
 #include "sysemu/device_tree.h"
 
 #include "hw/core/cpu.h"
+#include "hw/i2c/i2c.h"
 #include "hw/dtb-parse/dtb-parse.h"
 #include "migration/vmstate.h"
 
@@ -179,12 +180,86 @@ static DeviceState *machine_dtb_add_pci_bus(DynamicState *s,
     return dev;
 }
 
-static DeviceState *machine_dtb_add_peripheral_bus(DynamicState *s,
+static DeviceState *machine_dtb_add_i2c_bus(DynamicState *s,
                 DeviceState *parent_dev, const void *fdt, int node)
 {
     DeviceState *dev = NULL;
-    /* TODO: add i2c/spi bus code here */
-    pr_debug("adding %s as periph bus", fdt_get_name(fdt, node, NULL));
+    SysBusDevice *busdev;
+    I2CBus *bus;
+    unsigned i, compat_num;
+    int subnode;
+
+    compat_num = fdt_stringlist_count(fdt, node, DTB_PROP_COMPAT);
+    for (i = 0; i < compat_num; i++) {
+        const char *compat = fdt_stringlist_get(fdt, node,
+                            DTB_PROP_COMPAT, i, NULL);
+
+        /* strip manufacturer and try to create new device */
+        dev = qdev_try_new(str_fdt_compat_strip(compat));
+        if (dev) {
+            busdev = SYS_BUS_DEVICE(dev);
+            pr_debug("adding i2c bus %s", str_fdt_compat_strip(compat));
+            sysbus_realize_and_unref(busdev, &error_fatal);
+            break;
+        }
+    }
+
+    if (!dev) {
+        const char *node_name = fdt_get_name(fdt, node, NULL);
+        /*
+         * allow i2c device instantiation to proceed if bus device
+         * instantiation fails
+         */
+        pr_debug("failed to instantiate i2c bus %s", node_name);
+        bus = i2c_init_bus(NULL, node_name);
+    } else {
+        bus = (I2CBus *)qdev_get_child_bus(dev, "i2c");
+    }
+    add_dev_fdt_mapping(s, dev, node);
+
+    /* iterate over i2c devices */
+    fdt_for_each_subnode(subnode, fdt, node) {
+        const char *node_name = fdt_get_name(fdt, subnode, NULL);
+        DeviceState *child_dev = NULL;
+        uint64_t reg_addr;
+
+        /* skip devices with no reg value */
+        if (fdt_simple_addr_size(fdt, subnode, 0, &reg_addr, NULL)) {
+            pr_debug("i2c slave %s has no reg address! skipping...", node_name);
+            /* add to mapping to prevent recursive rescan */
+            add_dev_fdt_mapping(s, NULL, subnode);
+            continue;
+        }
+
+        /* try to instantiate i2c device using compatible string */
+        compat_num = fdt_stringlist_count(fdt, node, DTB_PROP_COMPAT);
+        for (i = 0; i < compat_num; i++) {
+            const char *compat = fdt_stringlist_get(fdt, node,
+                            DTB_PROP_COMPAT, i, NULL);
+
+            /* strip manufacturer and try to create new i2c device */
+            child_dev = qdev_try_new(str_fdt_compat_strip(compat));
+            if (child_dev) {
+                pr_debug("adding i2c slave %s", str_fdt_compat_strip(compat));
+                qdev_prop_set_uint8(child_dev, "address",
+                                            (uint8_t)reg_addr);
+                i2c_slave_realize_and_unref(I2C_SLAVE(child_dev),
+                                            bus, &error_abort);
+                break;
+            }
+        }
+        add_dev_fdt_mapping(s, child_dev, subnode);
+    }
+
+    return dev;
+}
+
+static DeviceState *machine_dtb_add_spi_bus(DynamicState *s,
+                DeviceState *parent_dev, const void *fdt, int node)
+{
+    DeviceState *dev = NULL;
+    /* TODO: add spi bus code here */
+    pr_debug("adding %s as spi bus", fdt_get_name(fdt, node, NULL));
     return dev;
 }
 
@@ -305,12 +380,16 @@ static DeviceState *machine_dtb_add_device_node(DynamicState *s,
             const char *compat = fdt_stringlist_get(fdt, node,
                                                 DTB_PROP_COMPAT, i, NULL);
 
-            /* FIXME: need more foolproof way to detect peripheral bus */
-            if ((strstr(compat, "i2c") != NULL &&
-                 strstr(node_name, "i2c") != NULL) ||
-                (strstr(compat, "spi") != NULL &&
-                 strstr(node_name, "spi") != NULL)) {
-                dev = machine_dtb_add_peripheral_bus(s,
+            /* FIXME: need more foolproof way to detect peripheral busses */
+            if (strstr(compat, "i2c") != NULL &&
+                strstr(node_name, "i2c") != NULL) {
+                dev = machine_dtb_add_i2c_bus(s,
+                                        parent_dev, fdt, node);
+                goto done;
+            }
+            if (strstr(compat, "spi") != NULL &&
+                strstr(node_name, "spi") != NULL) {
+                dev = machine_dtb_add_spi_bus(s,
                                         parent_dev, fdt, node);
                 goto done;
             }
@@ -348,7 +427,6 @@ static DeviceState *machine_dtb_add_device_node(DynamicState *s,
     }
 
 done:
-    add_dev_fdt_mapping(s, dev, node);
     return dev;
 }
 
