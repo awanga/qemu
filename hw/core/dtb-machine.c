@@ -299,8 +299,6 @@ static DeviceState *machine_dtb_add_simple_device(DynamicState *s,
     uint64_t reg_addr, reg_size;
     unsigned i, compat_num;
 
-    pr_debug("adding %s as simple device", fdt_get_name(fdt, node, NULL));
-
     /* try to instantiate "regular" device node using compatible string */
     compat_num = fdt_stringlist_count(fdt, node, DTB_PROP_COMPAT);
     for (i = 0; i < compat_num; i++) {
@@ -318,6 +316,8 @@ static DeviceState *machine_dtb_add_simple_device(DynamicState *s,
     }
 
     if (!dev) {
+        pr_debug("failed to add simple device %s",
+                            fdt_get_name(fdt, node, NULL));
         return NULL;
     }
 
@@ -527,9 +527,9 @@ static void machine_dtb_parse_init(MachineState *mch)
         }
 
         /*
-         * FIXME: when cpus node is missing, typically single CPU topology.
-         *        Need to decide if supporting manually setting multi-core
-         *        without cpus node use case is worth implementing
+         * TODO: when cpus node is missing, typically single CPU topology.
+         *       Need to decide if supporting manually setting multi-core
+         *       without cpus node use case is worth implementing
          */
         pr_debug("No CPU node found. Setting CPU to %s", mch->cpu_type);
         s->ncpus++;
