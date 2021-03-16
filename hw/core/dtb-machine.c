@@ -35,7 +35,6 @@ typedef struct {
     MachineState *mch;
     MemoryRegion *ram;
     CPUState *cpu[DTB_PARSE_MAX_NUM_CPUS];
-    SysBusDevice *busdev;
 
     const char *model_name;
     unsigned ncpus;
@@ -236,13 +235,9 @@ static DeviceState *machine_dtb_add_simple_device(DynamicState *s,
         /* strip manufacturer and try to create new device */
         dev = qdev_try_new(str_fdt_compat_strip(compat));
         if (dev) {
-            if (parent_dev) {
-                busdev = SYS_BUS_DEVICE(parent_dev);
-            } else {
-                busdev = s->busdev;
-            }
+            busdev = SYS_BUS_DEVICE(dev);
             pr_debug("creating device %s", str_fdt_compat_strip(compat));
-            sysbus_realize_and_unref(busdev, &error_fatal);
+            sysbus_realize_and_unref(busdev, &error_abort);
             break;
         }
     }
@@ -502,7 +497,6 @@ static void machine_dtb_parse_init(MachineState *mch)
             s->ncpus++;
         }
     }
-    s->busdev = SYS_BUS_DEVICE(s->cpu[0]);
 
     /* get system memory size */
     fdt_simple_addr_size(fdt, fdt_subnode_offset(fdt, 0, DTB_MEM_NODE),
