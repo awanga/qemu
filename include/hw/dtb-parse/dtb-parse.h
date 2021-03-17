@@ -53,7 +53,7 @@
  *  -FDT_ERR_BADVERSION,
  *  -FDT_ERR_TRUNCATED, standard meanings
  */
-int fdt_simple_addr_size(const void *fdt, int nodeoffset, int idx,
+int fdt_simple_addr_size(const void *fdt, int nodeoffset, unsigned idx,
              uint64_t *addrp, uint64_t *sizep);
 
 /* iterate over each reg property in a node */
@@ -63,7 +63,7 @@ int fdt_simple_addr_size(const void *fdt, int nodeoffset, int idx,
          idx++)
 
 /* helper function to strip manufacturer from compatibility string */
-static inline const char *str_fdt_compat_strip(const char *s1)
+static inline const char *strip_compat_string(const char *s1)
 {
     const char *s = strchr(s1, ',');
 

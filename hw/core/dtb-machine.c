@@ -1,13 +1,24 @@
 /*
- * DTB-Parsed Machine
+ *  DTB-Parsed Machine
  *
- * Author: Alfred Wanga <awanga@gmail.com>
+ *  Author: Alfred Wanga <awanga@gmail.com>
  *
- * Portions written by Benjamin Fair
+ * Portions of code written by Benjamin Fair
  *
- * This work is licensed under the terms of the GNU GPL, version 2 or later.
- * See the COPYING file in the top-level directory.
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, see <http://www.gnu.org/licenses/>.
+ *
+ * *****************************************************************
  */
 
 #include "qemu/osdep.h"
@@ -74,8 +85,8 @@ static int _fdt_read_cells(const fdt32_t *cells, unsigned int n,
     return 0;
 }
 
-/* from libfdt code written by Benjamin Fair */
-int fdt_simple_addr_size(const void *fdt, int nodeoffset, int idx,
+/* based on libfdt code written by Benjamin Fair */
+int fdt_simple_addr_size(const void *fdt, int nodeoffset, unsigned idx,
          uint64_t *addrp, uint64_t *sizep)
 {
     int parent;
@@ -112,6 +123,11 @@ int fdt_simple_addr_size(const void *fdt, int nodeoffset, int idx,
 
     reg_stride = ac + sc;
 
+    /* bounds checking on index to size of property */
+    if (idx >= (res / (reg_stride * sizeof(*reg)))) {
+        return -FDT_ERR_NOTFOUND;
+    }
+
     /*
      * res is the number of bytes read and must be an even multiple of the
      * sum of address cells and size cells
@@ -139,27 +155,98 @@ int fdt_simple_addr_size(const void *fdt, int nodeoffset, int idx,
 static int add_dev_fdt_mapping(DynamicState *s, DeviceState *dev,
                                       int node_offset)
 {
-    struct device_fdt_mapping *node =
+    struct device_fdt_mapping *mapping =
                 g_malloc0(sizeof(struct device_fdt_mapping));
 
-    node->dev = dev;
-    node->offset = node_offset;
-    node->next = s->mapping;
-    s->mapping = node;
+    mapping->dev = dev;
+    mapping->offset = node_offset;
+    mapping->next = s->mapping;
+    s->mapping = mapping;
     return 0;
 }
 
-static struct DeviceState *find_dev_fdt_mapping(DynamicState *s, int node)
+static int find_dev_fdt_mapping(DynamicState *s, int node, DeviceState **dev)
 {
-    struct device_fdt_mapping *head = s->mapping;
+    struct device_fdt_mapping *mapping = s->mapping;
 
-    while (head != NULL) {
-        if (head->offset == node) {
-            return head->dev;
+    while (mapping != NULL) {
+        if (mapping->offset == node) {
+            if (dev) {
+                *dev = mapping->dev;
+            }
+            return 0;
         }
-        head = head->next;
+        mapping = mapping->next;
     }
-    return NULL;
+    return -1;
+}
+
+/*
+ * TODO: ideally we don't want this -- goal is to use all supported devices
+ * unless implementation is really painful or impractical
+ */
+static int fdt_device_blocklist(const char *dev_id)
+{
+    unsigned i;
+    const char *blocklist[] = {
+        "pl050", /* need to split out to keyboard/mouse devices */
+    };
+
+    for (i = 0; i < sizeof(blocklist) / sizeof(blocklist[0]); i++) {
+        if (strncmp(dev_id, blocklist[i], strlen(blocklist[i])) == 0) {
+            return -1;
+        }
+    }
+}
+
+/*
+ * TODO: if this function gets too large, move to a separate file
+ *
+ * attempt to detect and add needed device properties before realization
+ * (properties that are needed for all devices of a given type should be
+ * handled in the appropriate machine_dtb_add_* function)
+ */
+static void fdt_device_fixup(DynamicState *s, const void *fdt, int node,
+                             DeviceState *dev, const char *dev_id)
+{
+    const char *node_name = fdt_get_name(fdt, node, NULL);
+
+    /* pl080x DMA fixup */
+    if (strncmp(dev_id, "pl08x", 4) == 0) {
+        MemoryRegion *sysmem = get_system_memory();
+        object_property_set_link(OBJECT(dev), "downstream",
+                                 OBJECT(sysmem), &error_fatal);
+        return;
+    }
+}
+
+static DeviceState *try_create_fdt_device(DynamicState *s,
+                                          const void *fdt, int node)
+{
+    DeviceState *dev = NULL;
+    unsigned i, compat_num;
+
+     /* try to instantiate "regular" device node using compatible string */
+    compat_num = fdt_stringlist_count(fdt, node, DTB_PROP_COMPAT);
+    for (i = 0; i < compat_num; i++) {
+        const char *compat = fdt_stringlist_get(fdt, node,
+                                DTB_PROP_COMPAT, i, NULL);
+
+        /* strip manufacturer from string if exists */
+        compat = strip_compat_string(compat);
+        if (fdt_device_blocklist(compat)) {
+            continue;
+        }
+        pr_debug("trying to instantiate %s", compat);
+
+        /* try to create new device */
+        dev = qdev_try_new(compat);
+        if (dev) {
+            fdt_device_fixup(s, fdt, node, dev, compat);
+            break;
+        }
+    }
+    return dev;
 }
 
 static DeviceState *machine_dtb_add_clocksource(DynamicState *s,
@@ -186,34 +273,21 @@ static DeviceState *machine_dtb_add_i2c_bus(DynamicState *s,
     DeviceState *dev = NULL;
     SysBusDevice *busdev;
     I2CBus *bus;
-    unsigned i, compat_num;
+    const char *parent_name = fdt_get_name(fdt, node, NULL);
     int subnode;
 
-    compat_num = fdt_stringlist_count(fdt, node, DTB_PROP_COMPAT);
-    for (i = 0; i < compat_num; i++) {
-        const char *compat = fdt_stringlist_get(fdt, node,
-                            DTB_PROP_COMPAT, i, NULL);
-
-        /* strip manufacturer and try to create new device */
-        dev = qdev_try_new(str_fdt_compat_strip(compat));
-        if (dev) {
-            busdev = SYS_BUS_DEVICE(dev);
-            pr_debug("adding i2c bus %s", str_fdt_compat_strip(compat));
-            sysbus_realize_and_unref(busdev, &error_fatal);
-            break;
-        }
-    }
-
-    if (!dev) {
-        const char *node_name = fdt_get_name(fdt, node, NULL);
+    dev = try_create_fdt_device(s, fdt, node);
+    if (dev) {
+        busdev = SYS_BUS_DEVICE(dev);
+        sysbus_realize_and_unref(busdev, &error_abort);
+        bus = (I2CBus *)qdev_get_child_bus(dev, "i2c");
+        pr_debug("added i2c bus %s", parent_name);
+    } else {
         /*
          * allow i2c device instantiation to proceed if bus device
          * instantiation fails
          */
-        pr_debug("failed to instantiate i2c bus %s", node_name);
-        bus = i2c_init_bus(NULL, node_name);
-    } else {
-        bus = (I2CBus *)qdev_get_child_bus(dev, "i2c");
+        pr_debug("failed to instantiate i2c bus %s", parent_name);
     }
     add_dev_fdt_mapping(s, dev, node);
 
@@ -223,29 +297,24 @@ static DeviceState *machine_dtb_add_i2c_bus(DynamicState *s,
         DeviceState *child_dev = NULL;
         uint64_t reg_addr;
 
-        /* skip devices with no reg value */
-        if (fdt_simple_addr_size(fdt, subnode, 0, &reg_addr, NULL)) {
-            pr_debug("i2c slave %s has no reg address! skipping...", node_name);
-            /* add to mapping to prevent recursive rescan */
-            add_dev_fdt_mapping(s, NULL, subnode);
-            continue;
-        }
+        /* if bus device setup failed, skip children, but still map */
+        if (dev) {
+            /* skip devices with no reg value */
+            if (fdt_simple_addr_size(fdt, subnode, 0, &reg_addr, NULL)) {
+                pr_debug("i2c slave %s has no reg address! skipping...",
+                         node_name);
+                /* add to mapping to prevent recursive rescan */
+                add_dev_fdt_mapping(s, NULL, subnode);
+                continue;
+            }
 
-        /* try to instantiate i2c device using compatible string */
-        compat_num = fdt_stringlist_count(fdt, node, DTB_PROP_COMPAT);
-        for (i = 0; i < compat_num; i++) {
-            const char *compat = fdt_stringlist_get(fdt, node,
-                            DTB_PROP_COMPAT, i, NULL);
-
-            /* strip manufacturer and try to create new i2c device */
-            child_dev = qdev_try_new(str_fdt_compat_strip(compat));
+            /* try to instantiate i2c device using compatible string */
+            child_dev = try_create_fdt_device(s, fdt, subnode);
             if (child_dev) {
-                pr_debug("adding i2c slave %s", str_fdt_compat_strip(compat));
-                qdev_prop_set_uint8(child_dev, "address",
-                                            (uint8_t)reg_addr);
+                qdev_prop_set_uint8(child_dev, "address", (uint8_t)reg_addr);
                 i2c_slave_realize_and_unref(I2C_SLAVE(child_dev),
                                             bus, &error_abort);
-                break;
+                pr_debug("added %s to i2c bus %s", node_name, parent_name);
             }
         }
         add_dev_fdt_mapping(s, child_dev, subnode);
@@ -297,33 +366,19 @@ static DeviceState *machine_dtb_add_simple_device(DynamicState *s,
     DeviceState *dev = NULL;
     SysBusDevice *busdev;
     uint64_t reg_addr, reg_size;
-    unsigned i, compat_num;
+    unsigned i;
 
     /* try to instantiate "regular" device node using compatible string */
-    compat_num = fdt_stringlist_count(fdt, node, DTB_PROP_COMPAT);
-    for (i = 0; i < compat_num; i++) {
-        const char *compat = fdt_stringlist_get(fdt, node,
-                                DTB_PROP_COMPAT, i, NULL);
-
-        /* strip manufacturer and try to create new device */
-        dev = qdev_try_new(str_fdt_compat_strip(compat));
-        if (dev) {
-            busdev = SYS_BUS_DEVICE(dev);
-            pr_debug("creating device %s", str_fdt_compat_strip(compat));
-            sysbus_realize_and_unref(busdev, &error_abort);
-            break;
-        }
-    }
-
-    if (!dev) {
-        pr_debug("failed to add simple device %s",
-                            fdt_get_name(fdt, node, NULL));
+    dev = try_create_fdt_device(s, fdt, node);
+    if (dev) {
+        busdev = SYS_BUS_DEVICE(dev);
+        sysbus_realize_and_unref(busdev, &error_abort);
+    } else {
         return NULL;
     }
 
     /* add memory region when reg property exists */
     fdt_for_each_reg_prop(i, fdt, node, &reg_addr, &reg_size) {
-        pr_debug("adding mmio region %llx", reg_addr);
         sysbus_mmio_map(busdev, i, reg_addr);
     }
 
@@ -346,6 +401,12 @@ static DeviceState *machine_dtb_add_device_node(DynamicState *s,
     const char *node_name = fdt_get_name(fdt, node, NULL);
     const char *dev_type = (const char *)fdt_getprop(fdt, node,
                                                      "device_type", NULL);
+
+    /* has this node been scanned already? */
+    if (find_dev_fdt_mapping(s, node, &dev) == 0) {
+        /* TODO: ensure connectivity to parent device */
+        return dev;
+    }
 
     /* check for explicit bus device types */
     if (dev_type != NULL) {
@@ -436,26 +497,16 @@ static int machine_dtb_scan_node(DynamicState *s, DeviceState *parent,
     DeviceState *dev = NULL;
     int cnt, subnode;
 
-    /* sanity check: has this node been scanned already? */
-    if (find_dev_fdt_mapping(s, node) != NULL) {
-        /* TODO: ensure connectivity to parent device */
-        return 0;
-    }
-
     /* check for compatible property list */
     cnt = fdt_stringlist_count(fdt, node, DTB_PROP_COMPAT);
     if (cnt > 0) {
-
         /* add device to machine */
         dev = machine_dtb_add_device_node(s, parent, fdt, node);
     }
 
     fdt_for_each_subnode(subnode, fdt, node) {
-        const char *node_name = fdt_get_name(fdt, subnode, NULL);
-
         /* recursively search subnodes */
-        machine_dtb_scan_node(s, dev, fdt,
-                fdt_subnode_offset(fdt, node, node_name));
+        machine_dtb_scan_node(s, dev, fdt, subnode);
     }
 
     return 0;
@@ -561,7 +612,7 @@ static void machine_dtb_parse_init(MachineState *mch)
             s->cpu[s->ncpus] = cpu_create(cpu_type);
             if (!s->cpu[s->ncpus]) {
                 /* try stripping manufacturer from cpu type */
-                const char *cpu_type_model = str_fdt_compat_strip(cpu_type);
+                const char *cpu_type_model = strip_compat_string(cpu_type);
 
                 if (cpu_type_model) {
                     s->cpu[s->ncpus] = cpu_create(cpu_type_model);
