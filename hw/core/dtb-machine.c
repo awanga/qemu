@@ -249,15 +249,6 @@ static DeviceState *try_create_fdt_device(DynamicState *s,
     return dev;
 }
 
-static DeviceState *machine_dtb_add_clocksource(DynamicState *s,
-                DeviceState *parent_dev, const void *fdt, int node)
-{
-    DeviceState *dev = NULL;
-    /* TODO: add clocksource code here */
-    pr_debug("adding %s as clocksource", fdt_get_name(fdt, node, NULL));
-    return dev;
-}
-
 static DeviceState *machine_dtb_add_pci_bus(DynamicState *s,
                 DeviceState *parent_dev, const void *fdt, int node)
 {
@@ -408,6 +399,11 @@ static DeviceState *machine_dtb_add_device_node(DynamicState *s,
         return dev;
     }
 
+    /* skip clock nodes (handle in second fixup pass) */
+    if (fdt_getprop(fdt, node, "#clock-cells", NULL) > 0) {
+        goto done;
+    }
+
     /* check for explicit bus device types */
     if (dev_type != NULL) {
 
@@ -464,12 +460,6 @@ static DeviceState *machine_dtb_add_device_node(DynamicState *s,
     }
     if (fdt_getprop(fdt, node, "interrupt-controller", NULL) > 0) {
         dev = machine_dtb_add_intr_controller(s, parent_dev, fdt, node);
-        goto done;
-    }
-
-    /* special case: check for "clock-cells" property */
-    if (fdt_getprop(fdt, node, "#clock-cells", NULL) > 0) {
-        dev = machine_dtb_add_clocksource(s, parent_dev, fdt, node);
         goto done;
     }
 
