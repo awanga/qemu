@@ -1594,11 +1594,13 @@ F: hw/i386/microvm.c
 F: include/hw/i386/microvm.h
 F: pc-bios/bios-microvm.bin
 
-dtb-parser
+fdt-machine
 M: Alfred Wanga <awanga@gmail.com>
 S: Maintained
-F: hw/core/dtb-machine.c
-F: include/hw/dtb-parse/dtb-parse.h
+F: hw/core/fdt-mch.c
+F: hw/core/fdt-mch-clock.c
+F: hw/core/fdt-mch-util.c
+F: include/hw/fdt-mch/fdt-mch.h
 T: git https://github.com/awanga/qemu.git dtb-parser
 
 Machine core

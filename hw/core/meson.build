@@ -39,7 +39,9 @@ softmmu_ss.add(files(
 ))
 
 softmmu_ss.add(when: 'CONFIG_DTB_PARSER', if_true: files(
-  'dtb-machine.c',
+  'fdt-mch.c',
+  'fdt-mch-clock.c',
+  'fdt-mch-util.c',
 ))
 
 specific_ss.add(when: 'CONFIG_SOFTMMU', if_true: files(
