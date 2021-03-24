@@ -30,8 +30,10 @@ typedef struct clock_cb_parameters ClockParameters;
 typedef struct {
     MachineState *mch;
     MemoryRegion *ram;
+
     CPUState *cpu[DTB_PARSE_MAX_NUM_CPUS];
     unsigned num_cpus;
+    uint64_t default_cpu_rate;
 
     /* clock tree structures */
     Clock **clocks;
@@ -40,10 +42,21 @@ typedef struct {
 
     const char *model_name;
 
+    /* mapping used to build machine at runtime */
     struct device_fdt_mapping {
         struct device_fdt_mapping *next;
-        DeviceState *dev;
         int offset;
+        struct device_fdt_info {
+            DeviceState *dev;
+
+            /* per device interrupt mapping */
+            qemu_irq *irqs;
+            unsigned num_intr;
+
+            /* per device gpio mapping */
+            qemu_irq *gpio;
+            unsigned num_gpio;
+        } info;
     } *mapping;
 
 } DynamicState;
@@ -52,7 +65,7 @@ void mch_fdt_build_clocktree(DynamicState *s, const void *fdt);
 
 /* internal device <-> fdt mapping routines */
 int mch_fdt_dev_add_mapping(DynamicState *s, DeviceState *dev, int node_offset);
-int mch_fdt_dev_find_mapping(DynamicState *s, int node, DeviceState **dev);
+struct device_fdt_info *mch_fdt_dev_find_mapping(DynamicState *s, int node);
 
 /* libfdt defines and extensions */
 int fdt_simple_addr_size(const void *fdt, int nodeoffset, unsigned idx,

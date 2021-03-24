@@ -165,26 +165,22 @@ int mch_fdt_dev_add_mapping(DynamicState *s, DeviceState *dev,
     struct device_fdt_mapping *mapping =
                 g_new0(struct device_fdt_mapping, 1);
 
-    mapping->dev = dev;
+    mapping->info.dev = dev;
     mapping->offset = node_offset;
     mapping->next = s->mapping;
     s->mapping = mapping;
     return 0;
 }
 
-int mch_fdt_dev_find_mapping(DynamicState *s, int node, DeviceState **dev)
+struct device_fdt_info *mch_fdt_dev_find_mapping(DynamicState *s, int node)
 {
     struct device_fdt_mapping *mapping = s->mapping;
 
     while (mapping != NULL) {
         if (mapping->offset == node) {
-            if (dev) {
-                *dev = mapping->dev;
-            }
-            return 0;
+            return &mapping->info;
         }
         mapping = mapping->next;
     }
-    return -1;
+    return NULL;
 }
-

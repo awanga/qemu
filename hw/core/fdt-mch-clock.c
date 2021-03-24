@@ -132,10 +132,14 @@ void mch_fdt_build_clocktree(DynamicState *s, const void *fdt)
             g_assert(idx < s->num_clocks);
             target_clk = s->clocks[idx];
         } else {
+            struct device_fdt_info *info = mch_fdt_dev_find_mapping(s, node);
+
             /* if this device hasn't been mapped, skip it */
-            if (mch_fdt_dev_find_mapping(s, node, &dev)) {
+            if (info == NULL) {
                 continue;
             }
+            dev = info->dev;
+
             /* if no device was created, then skip it */
             if (!dev) {
                 pr_debug("no device for %s found. skiping...",

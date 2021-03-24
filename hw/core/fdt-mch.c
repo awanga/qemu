@@ -251,15 +251,17 @@ static DeviceState *mch_fdt_add_device_node(DynamicState *s,
                 DeviceState *parent_dev, const void *fdt, int node)
 {
     DeviceState *dev = NULL;
+    struct device_fdt_info *info;
     bool has_subnodes = fdt_first_subnode(fdt, node) > 0;
     const char *node_name = fdt_get_name(fdt, node, NULL);
     const char *dev_type = (const char *)fdt_getprop(fdt, node,
                                                      "device_type", NULL);
 
     /* has this node been scanned already? */
-    if (mch_fdt_dev_find_mapping(s, node, &dev) == 0) {
+    info = mch_fdt_dev_find_mapping(s, node);
+    if (info != NULL) {
         /* TODO: ensure connectivity to parent device */
-        return dev;
+        return info->dev;
     }
 
     /* skip clock nodes, but keep count for second fixup pass */
@@ -402,6 +404,14 @@ static void mch_fdt_parse_init(MachineState *mch)
             exit(1);
     }
 
+    /* add machine properties */
+    object_property_add_uint64_ptr(OBJECT(mch), "cpu-freq",
+                                   &s->default_cpu_rate,
+                                   OBJ_PROP_FLAG_READWRITE);
+    object_property_set_description(OBJECT(mch), "cpu-freq",
+                                    "set clock frequency for CPU when the "
+                                    "device tree does not specify");
+
     /* get model name from dtb */
     s->model_name =
         g_strdup((const char *)qemu_fdt_getprop(fdt, "/", "model", &len, &err));
@@ -438,7 +448,7 @@ static void mch_fdt_parse_init(MachineState *mch)
         /* scan for cpus */
         fdt_for_each_subnode(offset, fdt, cpu_node) {
             const char *cpu_path, *cpu_type;
-            uint32_t freq;
+            uint64_t freq;
 
             cpu_path = fdt_get_name(fdt, offset, NULL);
             cpu_type = (const char *)qemu_fdt_getprop(fdt, cpu_path,
@@ -449,12 +459,13 @@ static void mch_fdt_parse_init(MachineState *mch)
             freq = qemu_fdt_getprop_cell(fdt, cpu_path,
                         "timebase-frequency", &len, &err);
             if (len < 0) {
-                /*
-                 * FIXME: create machine property to pass default
-                 * cpu frequency instead of hardcoding value
-                 */
-                freq = 200000000;
-                pr_debug("No frequency found. Default to %dMHz",
+
+                freq = s->default_cpu_rate;
+                if (freq == 0) {
+                        error_report("No cpu frequency found in fdt. "
+                                     "Provide value using cpu-freq property.");
+                }
+                pr_debug("No frequency found in fdt. Default to %lluMHz",
                         freq / 1000000);
             }
 
@@ -520,4 +531,4 @@ static void mch_fdt_parse_machine_init(MachineClass *mc)
     /*mc->max_cpus = DTB_PARSE_MAX_NUM_CPUS;*/
 }
 
-DEFINE_MACHINE("dtb_parse", mch_fdt_parse_machine_init)
+DEFINE_MACHINE("fdt_parse", mch_fdt_parse_machine_init)
