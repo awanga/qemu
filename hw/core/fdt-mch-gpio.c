@@ -43,8 +43,8 @@ void mch_fdt_connect_gpio(DynamicState *s, const void *fdt)
 
     fdt_for_each_node_with_prop(node, fdt, -1, "gpio-controller") {
         const char *node_name = fdt_get_name(fdt, node, NULL);
-        struct device_fdt_info *info = mch_fdt_dev_find_mapping(s, node);
-        unsigned cnt = 0, num_gpio_cell = 0;
+        FDTDevInfo *info = mch_fdt_dev_find_mapping(s, node);
+        unsigned num_gpio_cell = 0;
         int offset;
 
         pr_debug("scanning for %s gpios", node_name);
@@ -64,7 +64,7 @@ void mch_fdt_connect_gpio(DynamicState *s, const void *fdt)
         /* connect the devices to the right gpio controller */
         fdt_for_each_node_with_prop(offset, fdt, -1, "gpios") {
             const char *child_name = fdt_get_name(fdt, offset, NULL);
-            struct device_fdt_info *child_info;
+            FDTDevInfo *child_info;
             unsigned row;
 
             /* skip child node if not instantiated */

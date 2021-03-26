@@ -191,29 +191,3 @@ int fdt_node_offset_by_prop(const void *fdt, int startoffset,
 
     return offset; /* error from fdt_next_node() */
 }
-
-int mch_fdt_dev_add_mapping(DynamicState *s, DeviceState *dev,
-                                      int node_offset)
-{
-    struct device_fdt_mapping *mapping =
-                g_new0(struct device_fdt_mapping, 1);
-
-    mapping->info.dev = dev;
-    mapping->offset = node_offset;
-    mapping->next = s->mapping;
-    s->mapping = mapping;
-    return 0;
-}
-
-struct device_fdt_info *mch_fdt_dev_find_mapping(DynamicState *s, int node)
-{
-    struct device_fdt_mapping *mapping = s->mapping;
-
-    while (mapping != NULL) {
-        if (mapping->offset == node) {
-            return &mapping->info;
-        }
-        mapping = mapping->next;
-    }
-    return NULL;
-}

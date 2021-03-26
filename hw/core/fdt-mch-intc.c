@@ -63,7 +63,7 @@ void mch_fdt_build_interrupt_tree(DynamicState *s, const void *fdt)
 
     fdt_for_each_node_with_prop(node, fdt, -1, "interrupt-controller") {
         const char *node_name = fdt_get_name(fdt, node, NULL);
-        struct device_fdt_info *info = mch_fdt_dev_find_mapping(s, node);
+        FDTDevInfo *info = mch_fdt_dev_find_mapping(s, node);
         unsigned cnt = 0, num_intr_cell = 0;
         int offset;
 
@@ -114,7 +114,7 @@ void mch_fdt_build_interrupt_tree(DynamicState *s, const void *fdt)
         fdt_for_each_node_with_prop(offset, fdt, -1, "interrupts") {
             const char *child_name = fdt_get_name(fdt, offset, NULL);
             int intc = mch_fdt_get_intc_parent_node(fdt, offset);
-            struct device_fdt_info *child_info;
+            FDTDevInfo *child_info;
             uint32_t irq;
 
             if (intc != node) {

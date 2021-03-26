@@ -13,6 +13,7 @@
 
 #include <libfdt.h>
 
+#include "qemu/queue.h"
 #include "hw/clock.h"
 
 /* defines */
@@ -26,6 +27,17 @@
 /* structures */
 
 typedef struct clock_cb_parameters ClockParameters;
+
+typedef struct FDTDevInfo {
+    DeviceState *dev;
+    int offset;
+
+    /* per device interrupt mapping */
+    qemu_irq *irqs;
+    unsigned num_irqs;
+
+    QSLIST_ENTRY(FDTDevInfo) next;
+} FDTDevInfo;
 
 typedef struct {
     MachineState *mch;
@@ -47,17 +59,7 @@ typedef struct {
     const char *model_name;
 
     /* mapping used to build machine at runtime */
-    struct device_fdt_mapping {
-        struct device_fdt_mapping *next;
-        int offset;
-        struct device_fdt_info {
-            DeviceState *dev;
-
-            /* per device interrupt mapping */
-            qemu_irq *irqs;
-            unsigned num_irqs;
-        } info;
-    } *mapping;
+    QSLIST_HEAD(, FDTDevInfo) dev_map;
 
 } DynamicState;
 
@@ -69,8 +71,29 @@ void mch_fdt_build_interrupt_tree(DynamicState *s, const void *fdt);
 void mch_fdt_connect_gpio(DynamicState *s, const void *fdt);
 
 /* internal device <-> fdt mapping routines */
-int mch_fdt_dev_add_mapping(DynamicState *s, DeviceState *dev, int node_offset);
-struct device_fdt_info *mch_fdt_dev_find_mapping(DynamicState *s, int node);
+static inline int mch_fdt_dev_add_mapping(DynamicState *s,
+                                          DeviceState *dev, int node_offset)
+{
+    FDTDevInfo *info = g_new0(FDTDevInfo, 1);
+
+    info->offset = node_offset;
+    info->dev = dev;
+
+    QSLIST_INSERT_HEAD(&s->dev_map, info, next);
+    return 0;
+}
+
+static inline FDTDevInfo *mch_fdt_dev_find_mapping(DynamicState *s, int node)
+{
+    FDTDevInfo *mapping;
+
+    QSLIST_FOREACH(mapping, &s->dev_map, next) {
+        if (mapping->offset == node) {
+            return mapping;
+        }
+    }
+    return NULL;
+}
 
 /* libfdt defines and extensions */
 int fdt_simple_addr_size(const void *fdt, int nodeoffset, unsigned idx,

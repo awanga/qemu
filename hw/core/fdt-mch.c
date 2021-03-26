@@ -241,7 +241,7 @@ static DeviceState *mch_fdt_add_intr_controller(DynamicState *s,
 
     dev = mch_fdt_add_simple_device(s, parent_dev, fdt, node);
     if (dev) {
-        struct device_fdt_info *info;
+        FDTDevInfo *info;
 
         /* do not realize device until second pass is complete */
 
@@ -262,7 +262,7 @@ static DeviceState *mch_fdt_add_gpio_controller(DynamicState *s,
 
     dev = mch_fdt_add_simple_device(s, parent_dev, fdt, node);
     if (dev) {
-        struct device_fdt_info *info;
+        FDTDevInfo *info;
 
         /* do not realize device until second pass is complete */
 
@@ -279,7 +279,7 @@ static DeviceState *mch_fdt_add_device_node(DynamicState *s,
                 DeviceState *parent_dev, const void *fdt, int node)
 {
     DeviceState *dev = NULL;
-    struct device_fdt_info *info;
+    FDTDevInfo *info;
     bool has_subnodes = fdt_first_subnode(fdt, node) > 0;
     const char *node_name = fdt_get_name(fdt, node, NULL);
     const char *dev_type = (const char *)fdt_getprop(fdt, node,
@@ -418,7 +418,7 @@ static void mch_fdt_parse_init(MachineState *mch)
     uint64_t reg_addr, reg_size;
     int len, offset, cpu_node;
 
-    s->mapping = NULL;
+    QSLIST_INIT(&s->dev_map);
     s->mch = mch;
     s->ram = ram;
 
