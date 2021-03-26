@@ -26,6 +26,7 @@
 #include "qemu/error-report.h"
 #include "qemu/log.h"
 #include "qemu/option.h"
+#include "hw/sysbus.h"
 #include "hw/qdev-properties.h"
 #include "exec/address-spaces.h"
 #include "sysemu/sysemu.h"
@@ -35,8 +36,8 @@
 #include "hw/qdev-clock.h"
 #include "hw/fdt-mch/fdt-mch.h"
 
-static const char DTB_PROP_CLOCKS[] = "clocks";
-static const char DTB_PROP_CLKFREQ[] = "clock-frequency";
+static const char FDT_PROP_CLOCKS[] = "clocks";
+static const char FDT_PROP_CLKFREQ[] = "clock-frequency";
 
 typedef struct clock_cb_parameters {
     Clock *clk;
@@ -65,91 +66,72 @@ static void mch_fdt_clock_cb(void *opaque)
     clock_set_hz(param->clk, new_freq);
 }
 
-void mch_fdt_build_clocktree(DynamicState *s, const void *fdt)
+void mch_fdt_init_clocks(DynamicState *s, const void *fdt)
 {
     unsigned idx = 0;
-    int *node_map;
     int node;
+
+    /* count number of clock sources */
+    s->num_clocks = 0;
+    fdt_for_each_node_with_prop(node, fdt, -1, "#clock-cells") {
+        s->num_clocks++;
+    }
 
     if (s->num_clocks == 0) {
         pr_debug("no clocks found in device tree");
         return;
     }
     pr_debug("Found %u clocks in device tree", s->num_clocks);
-    pr_debug("Building clock tree...");
 
     /* allocate node map and pointers for clocks */
-    node_map = g_new0(int, s->num_clocks);
+    s->clock_node_map = g_new0(int, s->num_clocks);
     s->clocks = g_new0(Clock *, s->num_clocks);
 
-    /* phase 1: search device tree for clock sources first */
+    /* create clock objects for use during device initialization */
     fdt_for_each_node_with_prop(node, fdt, -1, "#clock-cells") {
         const char *node_name = fdt_get_name(fdt, node, NULL);
-        const void *freq_prop;
-        int len;
+        uint64_t freq;
 
         g_assert(idx <= s->num_clocks);
         s->clocks[idx] = clock_new(OBJECT(s->mch), node_name);
 
         /* add frequency for clock sources */
-        freq_prop = fdt_getprop(fdt, node, DTB_PROP_CLKFREQ, &len);
-        if (freq_prop) {
-            uint64_t freq = fdt_read_long(freq_prop, len / 4);
-
+        if (fdt_getprop_long(fdt, node, FDT_PROP_CLKFREQ, &freq) == 0) {
             clock_set_hz(s->clocks[idx], freq);
             pr_debug("* adding clocksource %s at %llu", node_name, freq);
         } else {
             pr_debug("* found derivative clock %s", node_name);
         }
 
-        node_map[idx] = node;
+        s->clock_node_map[idx] = node;
         idx++;
     }
 
-    /*
-     * pr_debug("dump clock nodes");
-     * for (idx = 0; idx < s->num_clocks; idx++) {
-     *     pr_debug(" node %u (%s) = %d", idx,
-     *         fdt_get_name(fdt, node_map[idx], NULL), node_map[idx]);
-     * }
-     */
-
-    /* phase 2: connect clocks & devices to source */
-    fdt_for_each_node_with_prop(node, fdt, -1, DTB_PROP_CLOCKS) {
+    /* hook up derivative clocks */
+    fdt_for_each_node_with_prop(node, fdt, -1, FDT_PROP_CLOCKS) {
         const char *node_name = fdt_get_name(fdt, node, NULL);
-        DeviceState *dev = NULL;
         Clock *target_clk = NULL;
         uint32_t phandle;
 
-        /* is this a derived clock, or a device? */
+        /* is this a derived clock? */
         if (fdt_getprop(fdt, node, "#clock-cells", NULL) > 0) {
             /* get index for derived clock structure */
             for (idx = 0; idx < s->num_clocks; idx++) {
-                if (node_map[idx] == node) {
+                if (s->clock_node_map[idx] == node) {
                     break;
                 }
             }
-            g_assert(idx < s->num_clocks);
+            assert(idx < s->num_clocks);
             target_clk = s->clocks[idx];
         } else {
-            struct device_fdt_info *info = mch_fdt_dev_find_mapping(s, node);
-
-            /* if this device hasn't been mapped, skip it */
-            if (info == NULL) {
-                continue;
-            }
-            dev = info->dev;
-
-            /* if no device was created, then skip it */
-            if (!dev) {
-                pr_debug("no device for %s found. skiping...",
-                            node_name);
-                continue;
-            }
+            /* skip devices */
+            continue;
         }
 
+        /* iterate over all clocks listed */
         for (idx = 0;
-             fdt_read_array_u32(fdt, node, DTB_PROP_CLOCKS, idx, &phandle) == 0;
+             fdt_getprop_array_u32(fdt, node, FDT_PROP_CLOCKS,
+                                   idx, &phandle) == 0;
              idx++) {
             Clock *parent_clk;
             unsigned node_idx;
@@ -157,18 +139,15 @@ void mch_fdt_build_clocktree(DynamicState *s, const void *fdt)
 
             /* lookup list index for node of clock source */
             for (node_idx = 0; node_idx < s->num_clocks; node_idx++) {
-                if (node_map[node_idx] == ref_node) {
+                if (s->clock_node_map[node_idx] == ref_node) {
                     break;
                 }
             }
             g_assert(node_idx < s->num_clocks);
             parent_clk = s->clocks[node_idx];
 
-            /* link parent clock to derived clock or device */
-            if (!dev) {
+            /* link parent clock to derived clock */
                 ClockParameters *param = g_malloc0(sizeof(ClockParameters));
-                const fdt32_t *val;
-                int len;
 
                 param->clk = target_clk;
                 param->node = node;
@@ -180,39 +159,64 @@ void mch_fdt_build_clocktree(DynamicState *s, const void *fdt)
                  *       May add support for more complex derived clocks in
                  *       the future.
                  */
-                val = fdt_getprop(fdt, node, "clock-mult", &len);
-                if (val > 0) {
-                    param->mult = fdt_read_long(val, len);
-                }
-                val = fdt_getprop(fdt, node, "clock-div", &len);
-                if (val > 0) {
-                    param->div = fdt_read_long(val, len);
-                }
+                fdt_getprop_cell(fdt, node, "clock-mult", &param->mult);
+                fdt_getprop_cell(fdt, node, "clock-div", &param->div);
 
                 clock_set_source(target_clk, parent_clk);
                 clock_set_callback(target_clk, mch_fdt_clock_cb,
                                                         (void *)param);
-            } else {
-                /* get clock name from fdt if clock-names property exists */
-                const char *clock_name = fdt_stringlist_get(fdt, node,
-                                                "clock-names", idx, NULL);
+        }
+    }
+}
 
-                /* use node name if no clock-names property found */
-                if (!clock_name) {
-                    /* terminate string at '@' if it exists */
-                    char *alt_clock_name =
+void mch_fdt_link_clocks(DynamicState *s, DeviceState *dev,
+                         const void *fdt, int node)
+{
+    uint32_t phandle;
+    unsigned idx;
+
+    /* do we even have clocks for this device? */
+    if (fdt_getprop(fdt, node, FDT_PROP_CLOCKS, NULL) < 0) {
+        return;
+    }
+
+    /* iterate over all clocks referenced */
+    for (idx = 0;
+         fdt_getprop_array_u32(fdt, node, FDT_PROP_CLOCKS, idx, &phandle) == 0;
+         idx++) {
+        const char *clock_name;
+        Clock *parent_clk;
+        unsigned node_idx;
+        int ref_node = fdt_node_offset_by_phandle(fdt, phandle);
+
+        /* lookup list index for node of clock source */
+        for (node_idx = 0; node_idx < s->num_clocks; node_idx++) {
+            if (s->clock_node_map[node_idx] == ref_node) {
+                break;
+            }
+        }
+        assert(node_idx < s->num_clocks);
+        parent_clk = s->clocks[node_idx];
+
+        /* get clock name from fdt if clock-names property exists */
+        clock_name = fdt_stringlist_get(fdt, node, "clock-names", idx, NULL);
+        if (!clock_name) {
+            /* use clk node name if no clock-names property found */
+            char *alt_clock_name =
                         subst_compat_string(fdt_get_name(fdt, node, NULL),
                                                 '@', '\0');
-                    qdev_connect_clock_in(dev, alt_clock_name, parent_clk);
-                    g_free(alt_clock_name);
-                } else {
-                    /* link parent clock to device */
-                    qdev_connect_clock_in(dev, clock_name, parent_clk);
-                }
+
+            /* link parent clock to device */
+            if (qdev_init_clock_in(dev, alt_clock_name, NULL, NULL) != NULL) {
+                qdev_connect_clock_in(dev, alt_clock_name, parent_clk);
+            }
+            g_free(alt_clock_name);
+        } else {
+
+            /* link parent clock to device */
+            if (qdev_init_clock_in(dev, clock_name, NULL, NULL) != NULL) {
+                qdev_connect_clock_in(dev, clock_name, parent_clk);
             }
         }
     }
-
-    g_free(node_map);
 }
-

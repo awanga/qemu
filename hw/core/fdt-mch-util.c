@@ -141,6 +141,39 @@ int fdt_simple_addr_size(const void *fdt, int nodeoffset, unsigned idx,
     return 0;
 }
 
+/* get value from an array of cells, by row and index with bound checking */
+int fdt_getprop_array_cell(const void *fdt, int nodeoffset, const char *prop,
+                           const unsigned stride, unsigned row, unsigned idx,
+                           uint32_t *val)
+{
+    int res;
+    const fdt32_t *reg;
+
+    reg = fdt_getprop(fdt, nodeoffset, prop, &res);
+    if (res < 0) {
+        return res;
+    }
+
+    /* bounds checking on row/index to size of property */
+    if (idx >= stride || row >= (res / (stride * sizeof(*reg)))) {
+        return -FDT_ERR_NOTFOUND;
+    }
+
+    /*
+     * res is the number of bytes read and must be an even multiple of the
+     * sum of address cells and size cells
+     */
+    if ((res % (stride * sizeof(*reg))) != 0) {
+        return -FDT_ERR_BADVALUE;
+    }
+
+    if (val) {
+        *val = fdt32_to_cpu(reg[idx + stride * row]);
+    }
+    return 0;
+}
+
+/* find offset of next node with a given property */
 int fdt_node_offset_by_prop(const void *fdt, int startoffset,
                             const char *propname)
 {

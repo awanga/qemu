@@ -1599,6 +1599,8 @@ M: Alfred Wanga <awanga@gmail.com>
 S: Maintained
 F: hw/core/fdt-mch.c
 F: hw/core/fdt-mch-clock.c
+F: hw/core/fdt-mch-gpio.c
+F: hw/core/fdt-mch-intc.c
 F: hw/core/fdt-mch-util.c
 F: include/hw/fdt-mch/fdt-mch.h
 T: git https://github.com/awanga/qemu.git dtb-parser

@@ -1,4 +1,4 @@
-config DTB_PARSER
+config FDT_PARSER
     bool
     depends on I2C
     default y

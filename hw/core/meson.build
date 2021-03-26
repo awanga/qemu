@@ -38,9 +38,11 @@ softmmu_ss.add(files(
   'clock-vmstate.c',
 ))
 
-softmmu_ss.add(when: 'CONFIG_DTB_PARSER', if_true: files(
+softmmu_ss.add(when: 'CONFIG_FDT_PARSER', if_true: files(
   'fdt-mch.c',
   'fdt-mch-clock.c',
+  'fdt-mch-gpio.c',
+  'fdt-mch-intc.c',
   'fdt-mch-util.c',
 ))
 

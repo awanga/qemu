@@ -36,10 +36,10 @@
 #include "hw/fdt-mch/fdt-mch.h"
 #include "migration/vmstate.h"
 
-static const char DTB_CPU_NODE[] = "cpus";
-static const char DTB_MEM_NODE[] = "memory";
+static const char FDT_NODE_CPU[] = "cpus";
+static const char FDT_NODE_MEM[] = "memory";
 
-static const char DTB_PROP_COMPAT[] = "compatible";
+static const char FDT_PROP_COMPAT[] = "compatible";
 
 /*
  * TODO: ideally we don't want this -- goal is to use all supported devices
@@ -88,10 +88,10 @@ static DeviceState *try_create_fdt_device(DynamicState *s,
     unsigned i, compat_num;
 
      /* try to instantiate "regular" device node using compatible string */
-    compat_num = fdt_stringlist_count(fdt, node, DTB_PROP_COMPAT);
+    compat_num = fdt_stringlist_count(fdt, node, FDT_PROP_COMPAT);
     for (i = 0; i < compat_num; i++) {
         const char *compat = fdt_stringlist_get(fdt, node,
-                                DTB_PROP_COMPAT, i, NULL);
+                                FDT_PROP_COMPAT, i, NULL);
 
         /* strip manufacturer from string if exists */
         compat = strip_compat_string(compat);
@@ -125,7 +125,7 @@ static DeviceState *mch_fdt_add_pci_bus(DynamicState *s,
 {
     DeviceState *dev = NULL;
     /* TODO: add pci bus code here */
-    pr_debug("adding %s as pci bus", fdt_get_name(fdt, node, NULL));
+    pr_debug("detected %s as pci bus", fdt_get_name(fdt, node, NULL));
     return dev;
 }
 
@@ -190,7 +190,7 @@ static DeviceState *mch_fdt_add_spi_bus(DynamicState *s,
 {
     DeviceState *dev = NULL;
     /* TODO: add spi bus code here */
-    pr_debug("adding %s as spi bus", fdt_get_name(fdt, node, NULL));
+    pr_debug("detected %s as spi bus", fdt_get_name(fdt, node, NULL));
     return dev;
 }
 
@@ -199,26 +199,7 @@ static DeviceState *mch_fdt_add_generic_bus(DynamicState *s,
 {
     DeviceState *dev = NULL;
     /* TODO: add generic bus code here */
-    pr_debug("adding %s as generic bus", fdt_get_name(fdt, node, NULL));
-    return dev;
-}
-
-static DeviceState *mch_fdt_add_intr_controller(DynamicState *s,
-                DeviceState *parent_dev, const void *fdt, int node)
-{
-    DeviceState *dev = NULL;
-    /* TODO: add interrupt controller code here */
-    pr_debug("adding %s as interrupt controller",
-                    fdt_get_name(fdt, node, NULL));
-    return dev;
-}
-
-static DeviceState *mch_fdt_add_gpio_controller(DynamicState *s,
-                DeviceState *parent_dev, const void *fdt, int node)
-{
-    DeviceState *dev = NULL;
-    /* TODO: add gpio controller code here */
-    pr_debug("adding %s as gpio controller", fdt_get_name(fdt, node, NULL));
+    pr_debug("detected %s as generic bus", fdt_get_name(fdt, node, NULL));
     return dev;
 }
 
@@ -233,9 +214,13 @@ static DeviceState *mch_fdt_add_simple_device(DynamicState *s,
     /* try to instantiate "regular" device node using compatible string */
     dev = try_create_fdt_device(s, fdt, node);
     if (dev) {
+        /* hook up clocks before device realization */
+        mch_fdt_link_clocks(s, dev, fdt, node);
+
         busdev = SYS_BUS_DEVICE(dev);
         sysbus_realize_and_unref(busdev, &error_abort);
     } else {
+        /* TODO: should we try to catch generic parts here i.e. cfi-flash? */
         return NULL;
     }
 
@@ -244,6 +229,49 @@ static DeviceState *mch_fdt_add_simple_device(DynamicState *s,
         sysbus_mmio_map(busdev, i, reg_addr);
     }
 
+    return dev;
+}
+
+/* TODO: should we move phase 1 of mch_fdt_build_interrupt_tree here? */
+static DeviceState *mch_fdt_add_intr_controller(DynamicState *s,
+                DeviceState *parent_dev, const void *fdt, int node)
+{
+    DeviceState *dev = NULL;
+    const char *node_name = fdt_get_name(fdt, node, NULL);
+
+    dev = mch_fdt_add_simple_device(s, parent_dev, fdt, node);
+    if (dev) {
+        struct device_fdt_info *info;
+
+        /* do not realize device until second pass is complete */
+
+        mch_fdt_dev_add_mapping(s, dev, node);
+        info = mch_fdt_dev_find_mapping(s, node);
+        pr_debug("added %s as interrupt controller", node_name);
+    } else {
+        pr_debug("failed to instantiate interrupt controller %s", node_name);
+    }
+    return dev;
+}
+
+static DeviceState *mch_fdt_add_gpio_controller(DynamicState *s,
+                DeviceState *parent_dev, const void *fdt, int node)
+{
+    DeviceState *dev = NULL;
+    const char *node_name = fdt_get_name(fdt, node, NULL);
+
+    dev = mch_fdt_add_simple_device(s, parent_dev, fdt, node);
+    if (dev) {
+        struct device_fdt_info *info;
+
+        /* do not realize device until second pass is complete */
+
+        mch_fdt_dev_add_mapping(s, dev, node);
+        info = mch_fdt_dev_find_mapping(s, node);
+        pr_debug("added %s as gpio controller", node_name);
+    } else {
+        pr_debug("failed to instantiate gpio controller %s", node_name);
+    }
     return dev;
 }
 
@@ -298,10 +326,10 @@ static DeviceState *mch_fdt_add_device_node(DynamicState *s,
         }
 
         /* check for i2c/spi bus */
-        compat_num = fdt_stringlist_count(fdt, node, DTB_PROP_COMPAT);
+        compat_num = fdt_stringlist_count(fdt, node, FDT_PROP_COMPAT);
         for (i = 0; i < compat_num; i++) {
             const char *compat = fdt_stringlist_get(fdt, node,
-                                                DTB_PROP_COMPAT, i, NULL);
+                                                FDT_PROP_COMPAT, i, NULL);
 
             /* FIXME: need more foolproof way to detect peripheral busses */
             if (strstr(compat, "i2c") != NULL &&
@@ -350,7 +378,7 @@ static int mch_fdt_scan_node(DynamicState *s, DeviceState *parent,
     int cnt, subnode;
 
     /* check for compatible property list */
-    cnt = fdt_stringlist_count(fdt, node, DTB_PROP_COMPAT);
+    cnt = fdt_stringlist_count(fdt, node, FDT_PROP_COMPAT);
     if (cnt > 0) {
         /* add device to machine */
         dev = mch_fdt_add_device_node(s, parent, fdt, node);
@@ -421,7 +449,7 @@ static void mch_fdt_parse_init(MachineState *mch)
     s->num_cpus = 0;
 
     /* look for cpu node in device tree */
-    cpu_node = fdt_subnode_offset(fdt, 0, DTB_CPU_NODE);
+    cpu_node = fdt_subnode_offset(fdt, 0, FDT_NODE_CPU);
     if (cpu_node < 0) {
         if (!mch->cpu_type) {
             error_report("Device tree has no CPU node. "
@@ -452,7 +480,7 @@ static void mch_fdt_parse_init(MachineState *mch)
 
             cpu_path = fdt_get_name(fdt, offset, NULL);
             cpu_type = (const char *)qemu_fdt_getprop(fdt, cpu_path,
-                                        DTB_PROP_COMPAT, &len, &error_fatal);
+                                        FDT_PROP_COMPAT, &len, &error_fatal);
 
             pr_debug("Found CPU %s (%s)", cpu_path, cpu_type);
 
@@ -489,7 +517,7 @@ static void mch_fdt_parse_init(MachineState *mch)
     }
 
     /* get system memory size */
-    fdt_simple_addr_size(fdt, fdt_subnode_offset(fdt, 0, DTB_MEM_NODE),
+    fdt_simple_addr_size(fdt, fdt_subnode_offset(fdt, 0, FDT_NODE_MEM),
         0, &reg_addr, &reg_size);
     pr_debug("System Memory = %lluMB @ 0x%llx",
                     reg_size / 1024 / 1024, reg_addr);
@@ -503,22 +531,23 @@ static void mch_fdt_parse_init(MachineState *mch)
     memory_region_init_ram(ram, NULL, "ram", mch->ram_size, &error_fatal);
     memory_region_add_subregion(get_system_memory(), reg_addr, ram);
 
+    /* initialize clocktree */
+    mch_fdt_init_clocks(s, fdt);
+
     /* iterate through all root nodes recursively */
     fdt_for_each_subnode(offset, fdt, 0) {
         const char *node_name = fdt_get_name(fdt, offset, NULL);
 
-        if (strcmp(node_name, DTB_CPU_NODE) == 0 ||
-            strcmp(node_name, DTB_MEM_NODE) == 0)
+        if (strcmp(node_name, FDT_NODE_CPU) == 0 ||
+            strcmp(node_name, FDT_NODE_MEM) == 0)
             continue;
 
         mch_fdt_scan_node(s, NULL, fdt, offset);
     }
 
-    /*
-     * TODO: connectivity fixup code after devices are created
-     *       including clocks, interrupts, gpio, etc.
-     */
-    mch_fdt_build_clocktree(s, fdt);
+    /* second pass - connectivity fixup of devices */
+    mch_fdt_build_interrupt_tree(s, fdt);
+    mch_fdt_connect_gpio(s, fdt);
 
     error_report("Completed init. Exiting...");
     exit(1);
