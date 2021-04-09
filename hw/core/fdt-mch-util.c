@@ -1,7 +1,7 @@
 /*
- *  FDT Parsed Machine Utility Functions
+ * FDT Parsed Machine Utility Functions
  *
- *  Author: Alfred Wanga <awanga@gmail.com>
+ * Author: Alfred Wanga <awanga@gmail.com>
  *
  * Portions of code written by Benjamin Fair
  *

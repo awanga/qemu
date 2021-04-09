@@ -1,9 +1,7 @@
 /*
- *  FDT Machine GPIO Routines
+ * FDT Machine GPIO Routines
  *
- *  Author: Alfred Wanga <awanga@gmail.com>
- *
- * Portions of code written by Benjamin Fair
+ * Author: Alfred Wanga <awanga@gmail.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
