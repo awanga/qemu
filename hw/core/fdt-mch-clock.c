@@ -100,7 +100,7 @@ void mch_fdt_init_clocks(DynamicState *s, const void *fdt)
             clock_set_hz(s->clocks[idx], freq);
             pr_debug("* adding clocksource %s at %llu", node_name, freq);
         } else {
-            pr_debug("* found derivative clock %s", node_name);
+            pr_debug("* adding derivative clock %s", node_name);
         }
 
         s->clock_node_map[idx] = node;
@@ -124,7 +124,7 @@ void mch_fdt_init_clocks(DynamicState *s, const void *fdt)
             assert(idx < s->num_clocks);
             target_clk = s->clocks[idx];
         } else {
-            /* skip devices */
+            /* skip devices for now (hook up as realized) */
             continue;
         }
 

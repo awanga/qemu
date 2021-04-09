@@ -32,11 +32,86 @@
 #include "sysemu/sysemu.h"
 #include "sysemu/device_tree.h"
 
-#include "hw/core/cpu.h"
 #include "hw/fdt-mch/fdt-mch.h"
 
+__attribute__((weak))
+qemu_irq *mch_fdt_get_cpu_irqs(CPUState *cpu, unsigned *num)
+{
+    /* not all archs need special handling (e.g. riscv) */
+    *num = 0;
+    return NULL;
+}
+
+/* setup and hookup cpu interrupts */
+void mch_fdt_intc_cpu_fixup(DynamicState *s, const void *fdt)
+{
+    FDTDevInfo *pic_info;
+    uint32_t idx;
+
+    /*
+     * NOTE: Details of how the cpu irqs are handled are architecture
+     *       specific. We use a arch-specific hook as a HAL to get
+     *       processor interrupt signals in a target agnostic manner.
+     */
+    for (idx = 0; idx < s->num_cpus; idx++) {
+        qemu_irq *irqs;
+        unsigned i, offset, num;
+
+        irqs = mch_fdt_get_cpu_irqs(s->cpu[idx], &num);
+        s->num_cpu_irqs = num; /* this should not change */
+
+        /* no fixup needed */
+        if (num == 0) return;
+
+        /* extend list of cpu irqs and append new ones to the list */
+        offset = num * idx;
+        if (!s->cpu_irqs) {
+            s->cpu_irqs = g_new0(qemu_irq, num);
+        } else {
+            s->cpu_irqs = g_renew(qemu_irq, s->cpu_irqs, offset + num);
+        }
+        for (i = 0; i < num; i++) {
+            s->cpu_irqs[offset + i] = irqs[i];
+        }
+
+        g_free(irqs);
+    }
+
+    /* connect the CPU irqs to the parent interrupt controller */
+    if (fdt_getprop_cell(fdt, 0, "interrupt-parent",
+                         &idx) < 0) {
+        /*
+         * found CPU irqs, but no global interrupt parent
+         * node found, so we can't connect interrupts properly
+         */
+        error_report("Expected to find parent interrupt controller "
+                     "for cpus in device tree, but none found. Device "
+                     "tree may not be valid. Cannot build functional "
+                     "interrupt tree.");
+        exit(1);
+    }
+    pic_info = mch_fdt_dev_find_mapping(s,
+                                        fdt_node_offset_by_phandle(fdt, idx));
+    if (pic_info == NULL)
+    {
+        /* found parent irq controller, but it failed to instantiate */
+        error_report("Unable to instantiate parent interrupt controller "
+                     "for cpu(s). Cannot build functional interrupt tree.");
+        exit(1);
+    }
+
+    /* cpus irqs are implicitly connected to "root" interrupt controller */
+    for (idx = 0; idx < s->num_cpus * s->num_cpu_irqs; idx++) {
+        sysbus_connect_irq(SYS_BUS_DEVICE(pic_info->dev), idx,
+                           s->cpu_irqs[idx]);
+    }
+
+    /* source interrupts will be connected when interrupt tree is generated */
+    return;
+}
+
 /* get interrupt parent node from property or inherited from parent */
-static int mch_fdt_get_intc_parent_node(const void *fdt, int node)
+static int mch_fdt_intc_get_parent_node(const void *fdt, int node)
 {
     uint32_t parent_intc = 0;
 
@@ -55,7 +130,7 @@ static int mch_fdt_get_intc_parent_node(const void *fdt, int node)
     return fdt_node_offset_by_phandle(fdt, parent_intc);
 }
 
-void mch_fdt_build_interrupt_tree(DynamicState *s, const void *fdt)
+void mch_fdt_intc_build_tree(DynamicState *s, const void *fdt)
 {
     int node;
 
@@ -83,7 +158,7 @@ void mch_fdt_build_interrupt_tree(DynamicState *s, const void *fdt)
 
         /* phase 1: find the max number of interrupts for the controller */
         fdt_for_each_node_with_prop(offset, fdt, -1, "interrupts") {
-            int intc = mch_fdt_get_intc_parent_node(fdt, offset);
+            int intc = mch_fdt_intc_get_parent_node(fdt, offset);
             uint32_t irq;
 
             if (intc != node) {
@@ -113,7 +188,7 @@ void mch_fdt_build_interrupt_tree(DynamicState *s, const void *fdt)
         /* phase 3: connect the devices to the right irq */
         fdt_for_each_node_with_prop(offset, fdt, -1, "interrupts") {
             const char *child_name = fdt_get_name(fdt, offset, NULL);
-            int intc = mch_fdt_get_intc_parent_node(fdt, offset);
+            int intc = mch_fdt_intc_get_parent_node(fdt, offset);
             FDTDevInfo *child_info;
             uint32_t irq;
 

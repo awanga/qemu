@@ -15,10 +15,9 @@
 
 #include "qemu/queue.h"
 #include "hw/clock.h"
+#include "hw/core/cpu.h"
 
-/* defines */
-
-#define DTB_PARSE_MAX_NUM_CPUS    16
+#include "hw/fdt-mch/fdt-mch-internal.h"
 
 /* debug routines */
 
@@ -43,18 +42,18 @@ typedef struct {
     MachineState *mch;
     MemoryRegion *ram;
 
-    CPUState *cpu[DTB_PARSE_MAX_NUM_CPUS];
+    /* cpu structures */
+    CPUState **cpu;
     unsigned num_cpus;
     qemu_irq *cpu_irqs;
-    unsigned num_cpu_intr;
+    unsigned num_cpu_irqs; /* per cpu */
     uint64_t default_cpu_rate;
 
     /* clock tree structures */
     Clock **clocks;
     ClockParameters *clock_params;
     unsigned num_clocks;
-    /* used to map clocks to fdt nodes during machine setup */
-    int *clock_node_map;
+    int *clock_node_map; /* map clocks to fdt nodes */
 
     const char *model_name;
 
@@ -67,8 +66,16 @@ void mch_fdt_init_clocks(DynamicState *s, const void *fdt);
 void mch_fdt_link_clocks(DynamicState *s, DeviceState *dev,
                          const void *fdt, int node);
 
-void mch_fdt_build_interrupt_tree(DynamicState *s, const void *fdt);
-void mch_fdt_connect_gpio(DynamicState *s, const void *fdt);
+void mch_fdt_intc_cpu_fixup(DynamicState *s, const void *fdt);
+void mch_fdt_intc_build_tree(DynamicState *s, const void *fdt);
+void mch_fdt_gpio_connect(DynamicState *s, const void *fdt);
+
+/* qemu helpers */
+static inline const char *qemu_cpu_get_arch_name(CPUState *cpu)
+{
+    CPUClass *cc = CPU_GET_CLASS(cpu);
+    return cc->gdb_arch_name(cpu);
+}
 
 /* internal device <-> fdt mapping routines */
 static inline int mch_fdt_dev_add_mapping(DynamicState *s,

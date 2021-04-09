@@ -78,5 +78,6 @@ ppc_ss.add(when: 'CONFIG_E500', if_true: files(
 ))
 # PowerPC 440 Xilinx ML507 reference board.
 ppc_ss.add(when: 'CONFIG_VIRTEX', if_true: files('virtex_ml507.c'))
-
+# fdt-mch
+ppc_ss.add(when: 'CONFIG_FDT_PARSER', if_true: files('fdt-mch.c'))
 hw_arch += {'ppc': ppc_ss}

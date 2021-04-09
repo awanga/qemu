@@ -32,10 +32,9 @@
 #include "sysemu/sysemu.h"
 #include "sysemu/device_tree.h"
 
-#include "hw/core/cpu.h"
 #include "hw/fdt-mch/fdt-mch.h"
 
-void mch_fdt_connect_gpio(DynamicState *s, const void *fdt)
+void mch_fdt_gpio_connect(DynamicState *s, const void *fdt)
 {
     int node;
 

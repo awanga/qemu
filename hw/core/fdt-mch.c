@@ -424,7 +424,7 @@ static void mch_fdt_parse_init(MachineState *mch)
 
     /* load the device tree with some checking */
     if (!mch->dtb) {
-            error_report("DTB Parser machine requires use of -dtb parameter");
+            error_report("FDT Parser machine requires use of -dtb parameter");
             exit(1);
     }
     if (machine_load_device_tree(mch->dtb, &fdt)) {
@@ -440,7 +440,7 @@ static void mch_fdt_parse_init(MachineState *mch)
                                     "set clock frequency for CPU when the "
                                     "device tree does not specify");
 
-    /* get model name from dtb */
+    /* get model name from fdt */
     s->model_name =
         g_strdup((const char *)qemu_fdt_getprop(fdt, "/", "model", &len, &err));
     pr_debug("Scanning Device Tree for %s...\n", s->model_name);
@@ -451,6 +451,8 @@ static void mch_fdt_parse_init(MachineState *mch)
     /* look for cpu node in device tree */
     cpu_node = fdt_subnode_offset(fdt, 0, FDT_NODE_CPU);
     if (cpu_node < 0) {
+        unsigned idx;
+
         if (!mch->cpu_type) {
             error_report("Device tree has no CPU node. "
                          "Use -cpu to manually determine CPU");
@@ -458,21 +460,27 @@ static void mch_fdt_parse_init(MachineState *mch)
         }
 
         /* no CPU node found - try to use information passed to QEMU */
-        s->cpu[0] = cpu_create(mch->cpu_type);
-        if (!s->cpu[0]) {
-            error_report("No CPU node found. Could not manually init CPU %s",
-                    mch->cpu_type);
-            exit(1);
+        s->num_cpus = MAX(mch->smp.cpus, 1);
+        s->cpu = g_new0(CPUState *, s->num_cpus);
+        for (idx = 0; idx < s->num_cpus; idx++) {
+            s->cpu[idx] = cpu_create(mch->cpu_type);
+            if (!s->cpu[idx]) {
+                error_report("Could not manually init CPU %s",
+                        mch->cpu_type);
+                exit(1);
+            }
         }
-
-        /*
-         * TODO: when cpus node is missing, typically single CPU topology.
-         *       Need to decide if supporting manually setting multi-core
-         *       without cpus node use case is worth implementing
-         */
-        pr_debug("No CPU node found. Setting CPU to %s", mch->cpu_type);
-        s->num_cpus++;
+        pr_debug("No CPU node found. Creating %u %s CPU(s)",
+                 s->num_cpus, mch->cpu_type);
     } else {
+        unsigned idx = 0;
+
+        /* count number of cpu nodes first and allocate pointers */
+        fdt_for_each_subnode(offset, fdt, cpu_node) {
+            s->num_cpus++;
+        }
+        s->cpu = g_new0(CPUState *, s->num_cpus);
+
         /* scan for cpus */
         fdt_for_each_subnode(offset, fdt, cpu_node) {
             const char *cpu_path, *cpu_type;
@@ -498,23 +506,26 @@ static void mch_fdt_parse_init(MachineState *mch)
             }
 
             /* create cpu using compatible string */
-            s->cpu[s->num_cpus] = cpu_create(cpu_type);
-            if (!s->cpu[s->num_cpus]) {
+            s->cpu[idx] = cpu_create(cpu_type);
+            if (!s->cpu[idx]) {
                 /* try stripping manufacturer from cpu type */
                 const char *cpu_type_model = strip_compat_string(cpu_type);
 
                 if (cpu_type_model) {
-                    s->cpu[s->num_cpus] = cpu_create(cpu_type_model);
+                    s->cpu[idx] = cpu_create(cpu_type_model);
                 }
 
-                if (!cpu_type_model || !s->cpu[s->num_cpus]) {
+                if (!cpu_type_model || !s->cpu[idx]) {
                     error_report("Unable to initialize CPU");
                     exit(1);
                 }
             }
-            s->num_cpus++;
+            idx++;
         }
     }
+
+    /* hook up CPU interrupts */
+    mch_fdt_intc_cpu_fixup(s, fdt);
 
     /* get system memory size */
     fdt_simple_addr_size(fdt, fdt_subnode_offset(fdt, 0, FDT_NODE_MEM),
@@ -546,8 +557,8 @@ static void mch_fdt_parse_init(MachineState *mch)
     }
 
     /* second pass - connectivity fixup of devices */
-    mch_fdt_build_interrupt_tree(s, fdt);
-    mch_fdt_connect_gpio(s, fdt);
+    mch_fdt_intc_build_tree(s, fdt);
+    mch_fdt_gpio_connect(s, fdt);
 
     error_report("Completed init. Exiting...");
     exit(1);
