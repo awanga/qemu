@@ -20,6 +20,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/units.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "qemu/log.h"
@@ -31,28 +32,28 @@
 #include "sysemu/sysemu.h"
 #include "sysemu/device_tree.h"
 
+#include "hw/block/flash.h"
 #include "hw/core/cpu.h"
-#include "hw/i2c/i2c.h"
 #include "hw/fdt-mch/fdt-mch.h"
+#include "hw/i2c/i2c.h"
+#include "hw/misc/unimp.h"
 #include "migration/vmstate.h"
 
 static const char FDT_NODE_CPU[] = "cpus";
 static const char FDT_NODE_MEM[] = "memory";
 
-static const char FDT_PROP_COMPAT[] = "compatible";
-
 /*
  * TODO: ideally we don't want this -- goal is to use all supported devices
  * unless fixup implementation is really painful or impractical
  */
-static int fdt_device_blocklist(const char *dev_id)
+static int mch_fdt_device_blocklist(const char *dev_id)
 {
     unsigned i;
     const char *blocklist[] = {
         "pl050", /* need to split out to keyboard/mouse devices */
     };
 
-    for (i = 0; i < sizeof(blocklist) / sizeof(blocklist[0]); i++) {
+    for (i = 0; i < ARRAY_SIZE(blocklist); i++) {
         if (strncmp(dev_id, blocklist[i], strlen(blocklist[i])) == 0) {
             return -1;
         }
@@ -67,10 +68,10 @@ static int fdt_device_blocklist(const char *dev_id)
  * (properties that are needed for all devices of a given type should be
  * handled in the appropriate mch_fdt_add_* function)
  */
-static void fdt_device_fixup(DynamicState *s, const void *fdt, int node,
+static void mch_fdt_device_fixup(DynamicState *s, const void *fdt, int node,
                              DeviceState *dev, const char *dev_id)
 {
-    const char *node_name = fdt_get_name(fdt, node, NULL);
+    /* const char *node_name = fdt_get_name(fdt, node, NULL); */
 
     /* pl080x DMA fixup */
     if (strncmp(dev_id, "pl08x", 4) == 0) {
@@ -79,6 +80,118 @@ static void fdt_device_fixup(DynamicState *s, const void *fdt, int node,
                                  OBJECT(sysmem), &error_fatal);
         return;
     }
+}
+
+static int mch_fdt_add_properties(const void *fdt, int node,
+                             DeviceState *dev)
+{
+    int offset;
+    const char *prop_skiplist[] = {
+        "#",
+        "compatible",
+        "reg",
+        "ranges",
+        "clock",
+        "interrupt",
+        "gpio",
+    };
+
+    fdt_for_each_property(fdt, node, offset) {
+        unsigned i;
+        int len;
+        const void *val;
+        const char *propname;
+
+        val = fdt_getprop_by_offset(fdt, offset, &propname, &len);
+
+        /* skip properties beginning with skip list substrings */
+        for (i = 0; i < ARRAY_SIZE(prop_skiplist); i++) {
+            if (strncmp(propname, prop_skiplist[i],
+                        strlen(prop_skiplist[i])) == 0) {
+                break;
+            }
+        }
+        if (i < ARRAY_SIZE(prop_skiplist)) {
+            continue;
+        }
+
+        if (len == 0) {
+            /*qdev_prop_set_bit(dev, propname, true);*/
+            pr_debug("found bool property %s in %s",
+                     propname, fdt_get_name(fdt, node, NULL));
+        } else if (len == 4) {
+            uint32_t prop_val = fdt32_to_cpu(*(const fdt32_t *)val);
+            /*qdev_prop_set_uint32(dev, propname, prop_val);*/
+            pr_debug("found property value %s (%u) in %s",
+                     propname, prop_val, fdt_get_name(fdt, node, NULL));
+        } else if (len == 8) {
+            /*uint64_t prop_val;
+
+            fdt_getprop_long(fdt, node, propname, &prop_val);
+            qdev_prop_set_uint64(dev, propname, prop_val);*/
+            pr_debug("found property value %s in %s",
+                     propname, fdt_get_name(fdt, node, NULL));
+        } else {
+            /* do length checking to verify it is a string */
+            const char *str = (const char *)fdt_getprop(fdt, node,
+                                                        propname, &len);
+
+            /* arbitrary 1K string limit sanity check */
+            if (len == strnlen(str, 1023) + 1) {
+                qdev_prop_set_string(dev, propname, str);
+                pr_debug("found property string %s in %s",
+                         propname, fdt_get_name(fdt, node, NULL));
+            } else {
+                pr_debug("found property of unknown type %s in %s (%u != %lu)",
+                         propname, fdt_get_name(fdt, node, NULL),
+                         len, strnlen(str, 1023) + 1);
+            }
+        }
+    }
+    return 0;
+}
+
+static DeviceState *try_create_fdt_dummy_device(DynamicState *s,
+                                                const void *fdt, int node)
+{
+    DeviceState *dev = NULL;
+    const char *node_name = fdt_get_name(fdt, node, NULL);
+    const char *compat;
+    char dummy_name[64];
+    unsigned i;
+    uint64_t reg_addr, reg_size, size = 0;
+
+    /* get most specific compatible name and strip manufacturer */
+    if (fdt_getprop(fdt, node, FDT_PROP_COMPAT, NULL) == 0) {
+        return NULL;
+    }
+    compat = str_strip(fdt_stringlist_get(fdt, node, FDT_PROP_COMPAT,
+                                          0, NULL), ',');
+
+    snprintf(dummy_name, 64, "%s.%s", compat, node_name);
+    fdt_for_each_reg_prop(i, fdt, node, &reg_addr, &reg_size) {
+        size += reg_size;
+    }
+    if (i == 0) {
+        return NULL;
+    }
+
+    pr_debug("created dummy device: %s, size = %llu", dummy_name, size);
+
+    dev = qdev_new(TYPE_UNIMPLEMENTED_DEVICE);
+    qdev_prop_set_string(dev, "name", dummy_name);
+    qdev_prop_set_uint64(dev, "size", size);
+
+    mch_fdt_add_properties(fdt, node, dev);
+
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_abort);
+
+    fdt_for_each_reg_prop(i, fdt, node, &reg_addr, &reg_size) {
+        sysbus_mmio_map_overlap(SYS_BUS_DEVICE(dev), i,
+                                reg_addr, -1000);
+    }
+
+    return dev;
 }
 
 static DeviceState *try_create_fdt_device(DynamicState *s,
@@ -94,15 +207,15 @@ static DeviceState *try_create_fdt_device(DynamicState *s,
                                 FDT_PROP_COMPAT, i, NULL);
 
         /* strip manufacturer from string if exists */
-        compat = strip_compat_string(compat);
-        if (fdt_device_blocklist(compat)) {
+        compat = str_strip(compat, ',');
+        if (mch_fdt_device_blocklist(compat)) {
             continue;
         }
 
         /* try to create new device */
         dev = qdev_try_new(compat);
         if (dev) {
-            fdt_device_fixup(s, fdt, node, dev, compat);
+            mch_fdt_device_fixup(s, fdt, node, dev, compat);
             break;
         } else {
             /* try version of compatibility string with underscores */
@@ -110,13 +223,14 @@ static DeviceState *try_create_fdt_device(DynamicState *s,
 
             dev = qdev_try_new(alt_compat);
             if (dev) {
-                fdt_device_fixup(s, fdt, node, dev, compat);
+                mch_fdt_device_fixup(s, fdt, node, dev, compat);
                 g_free(alt_compat);
                 break;
             }
             g_free(alt_compat);
         }
     }
+
     return dev;
 }
 
@@ -124,8 +238,98 @@ static DeviceState *mch_fdt_add_pci_bus(DynamicState *s,
                 DeviceState *parent_dev, const void *fdt, int node)
 {
     DeviceState *dev = NULL;
-    /* TODO: add pci bus code here */
-    pr_debug("detected %s as pci bus", fdt_get_name(fdt, node, NULL));
+    SysBusDevice *busdev;
+    PCIBus *bus;
+    const char *parent_name = fdt_get_name(fdt, node, NULL);
+    int subnode;
+
+    dev = try_create_fdt_device(s, fdt, node);
+    if (dev) {
+        unsigned child_addr_sz, parent_addr_sz, region, row, row_sz, size_sz;
+        const fdt32_t *ranges;
+        uint64_t reg_addr;
+
+        busdev = SYS_BUS_DEVICE(dev);
+        sysbus_realize_and_unref(busdev, &error_abort);
+
+        /* add mmio regions */
+        fdt_for_each_reg_prop(region, fdt, node, &reg_addr, NULL) {
+            pr_debug("pci mmio: region %u: %llx", region, reg_addr);
+            sysbus_mmio_map(busdev, region, reg_addr);
+        }
+
+        /* get cell sizes for range property */
+        fdt_getprop_cell(fdt, node, "#size-cells", &size_sz);
+        fdt_getprop_cell(fdt, node, "#address-cells", &child_addr_sz);
+        fdt_getprop_cell(fdt, fdt_parent_offset(fdt, node),
+                         "#address-cells", &parent_addr_sz);
+
+        /* iterate over all ranges */
+        row_sz = child_addr_sz + parent_addr_sz + size_sz;
+        ranges = fdt_getprop(fdt, node, "ranges", NULL);
+        fdt_for_each_cell_array(row, fdt, node, "ranges", row_sz) {
+            uint64_t child_addr = 0, parent_addr = 0, size = 0;
+            unsigned i;
+
+            /*
+             * TODO: these loops will lose the most significant bits
+             *       if the cell count is greater than 2. those values
+             *       are rarely used, and so are intentionally ignored
+             *       (for now - may revisit in the future)
+             */
+            for (i = 0; i < child_addr_sz; i++) {
+                child_addr = (child_addr << 32) | fdt32_to_cpu(*(ranges++));
+            }
+            for (i = 0; i < parent_addr_sz; i++) {
+                parent_addr = (parent_addr << 32) | fdt32_to_cpu(*(ranges++));
+            }
+            for (i = 0; i < size_sz; i++) {
+                size = (size << 32) | fdt32_to_cpu(*(ranges++));
+            }
+
+            pr_debug("pci mmio: region %u: %llx (sz=%llx)",
+                     region, parent_addr, size);
+            sysbus_mmio_map(busdev, region++, parent_addr);
+        }
+
+        bus = (PCIBus *)qdev_get_child_bus(dev, "pci");
+        pr_debug("added pci bus %s", parent_name);
+    } else {
+        pr_debug("failed to instantiate pci bus %s", parent_name);
+    }
+    mch_fdt_dev_add_mapping(s, dev, node);
+
+    /* iterate over pci devices */
+    fdt_for_each_subnode(subnode, fdt, node) {
+        const char *node_name = fdt_get_name(fdt, subnode, NULL);
+        DeviceState *child_dev = NULL;
+#if 0
+        uint64_t reg_addr;
+
+        /* if bus device setup failed, add null mapping for child nodes */
+        if (dev) {
+            /* skip devices with no reg value */
+            if (fdt_simple_addr_size(fdt, subnode, 0, &reg_addr, NULL)) {
+                pr_debug("i2c slave %s has no reg address! skipping...",
+                         node_name);
+                /* add null mapping to prevent recursive rescan */
+                mch_fdt_dev_add_mapping(s, NULL, subnode);
+                continue;
+            }
+
+            /* try to instantiate pci device using compatible string */
+            child_dev = try_create_fdt_device(s, fdt, subnode);
+            if (child_dev) {
+                /*qdev_prop_set_uint8(child_dev, "address", (uint8_t)reg_addr);
+                i2c_slave_realize_and_unref(I2C_SLAVE(child_dev),
+                                            bus, &error_abort);*/
+                pr_debug("added %s to pci bus %s", node_name, parent_name);
+            }
+        }
+#endif
+        mch_fdt_dev_add_mapping(s, child_dev, subnode);
+    }
+
     return dev;
 }
 
@@ -145,10 +349,6 @@ static DeviceState *mch_fdt_add_i2c_bus(DynamicState *s,
         bus = (I2CBus *)qdev_get_child_bus(dev, "i2c");
         pr_debug("added i2c bus %s", parent_name);
     } else {
-        /*
-         * allow i2c device instantiation to proceed if bus device
-         * instantiation fails
-         */
         pr_debug("failed to instantiate i2c bus %s", parent_name);
     }
     mch_fdt_dev_add_mapping(s, dev, node);
@@ -159,13 +359,13 @@ static DeviceState *mch_fdt_add_i2c_bus(DynamicState *s,
         DeviceState *child_dev = NULL;
         uint64_t reg_addr;
 
-        /* if bus device setup failed, skip children, but still map */
+        /* if bus device setup failed, add null mapping for child nodes */
         if (dev) {
             /* skip devices with no reg value */
             if (fdt_simple_addr_size(fdt, subnode, 0, &reg_addr, NULL)) {
                 pr_debug("i2c slave %s has no reg address! skipping...",
                          node_name);
-                /* add to mapping to prevent recursive rescan */
+                /* add null mapping to prevent recursive rescan */
                 mch_fdt_dev_add_mapping(s, NULL, subnode);
                 continue;
             }
@@ -189,8 +389,74 @@ static DeviceState *mch_fdt_add_spi_bus(DynamicState *s,
                 DeviceState *parent_dev, const void *fdt, int node)
 {
     DeviceState *dev = NULL;
-    /* TODO: add spi bus code here */
-    pr_debug("detected %s as spi bus", fdt_get_name(fdt, node, NULL));
+    SysBusDevice *busdev;
+    SSIBus *bus;
+    const char *parent_name = fdt_get_name(fdt, node, NULL);
+    int subnode;
+
+    dev = try_create_fdt_device(s, fdt, node);
+    if (dev) {
+        unsigned num_cs = 1;
+        int idx;
+
+        busdev = SYS_BUS_DEVICE(dev);
+        sysbus_realize_and_unref(busdev, &error_abort);
+
+        /* property has many variants, but always has substring "num-cs" */
+        idx = fdt32_to_cpu(*(const fdt32_t *)fdt_find_property_match(fdt,
+                                                                     node,
+                                                                     "num-cs",
+                                                                     NULL));
+        if (idx > 0) {
+            num_cs = idx;
+        } else {
+            /* count children and round to nearest power of two */
+            fdt_for_each_subnode(subnode, fdt, node) {
+                /* increment num_cs to next power of two */
+                if (++idx > num_cs) {
+                    num_cs <<= 1;
+                }
+            }
+        }
+
+        bus = (SSIBus *)qdev_get_child_bus(dev, "spi");
+        pr_debug("added spi bus %s (num_cs = %u)", parent_name, num_cs);
+    } else {
+        pr_debug("failed to instantiate spi bus %s", parent_name);
+    }
+    mch_fdt_dev_add_mapping(s, dev, node);
+
+    /* iterate over spi devices */
+    fdt_for_each_subnode(subnode, fdt, node) {
+        const char *node_name = fdt_get_name(fdt, subnode, NULL);
+        DeviceState *child_dev = NULL;
+#if 0
+        uint64_t reg_addr;
+
+        /* if bus device setup failed, add null mapping for child nodes */
+        if (dev) {
+            /* skip devices with no reg value */
+            if (fdt_simple_addr_size(fdt, subnode, 0, &reg_addr, NULL)) {
+                pr_debug("spi slave %s has no reg address! skipping...",
+                         node_name);
+                /* add null mapping to prevent recursive rescan */
+                mch_fdt_dev_add_mapping(s, NULL, subnode);
+                continue;
+            }
+
+            /* try to instantiate spi device using compatible string */
+            child_dev = try_create_fdt_device(s, fdt, subnode);
+            if (child_dev) {
+                qdev_prop_set_uint8(child_dev, "address", (uint8_t)reg_addr);
+                i2c_slave_realize_and_unref(I2C_SLAVE(child_dev),
+                                            bus, &error_abort);
+                pr_debug("added %s to spi bus %s", node_name, parent_name);
+            }
+        }
+#endif
+        mch_fdt_dev_add_mapping(s, child_dev, subnode);
+    }
+
     return dev;
 }
 
@@ -220,8 +486,61 @@ static DeviceState *mch_fdt_add_simple_device(DynamicState *s,
         busdev = SYS_BUS_DEVICE(dev);
         sysbus_realize_and_unref(busdev, &error_abort);
     } else {
-        /* TODO: should we try to catch generic parts here i.e. cfi-flash? */
-        return NULL;
+        const char *node_name = fdt_get_name(fdt, node, NULL);
+
+#if 0 /*def CONFIG_PFLASH_CFI01*/
+        /* generic flash devices */
+        if (fdt_compat_strstr(fdt, node, "cfi-flash") == 0 ||
+            fdt_compat_strstr(fdt, node, "jedec-flash") == 0) {
+            unsigned sect_size, bank_width = 1;
+            DriveInfo *dinfo = drive_get(IF_PFLASH, 0,
+                                         s->drive_count[IF_PFLASH]++);
+
+            /* FIXME: handle three element regs */
+            fdt_simple_addr_size(fdt, node, 0, &reg_addr, &reg_size);
+            fdt_getprop_cell(fdt, node, "bank-width", &bank_width);
+
+            /* guess sector size - should cover most (?) cases */
+            if (reg_size < 8 * MiB) {
+                sect_size = 64 * KiB;
+            } else if (reg_size < 32 * MiB) {
+                sect_size = 128 * KiB;
+            } else {
+                sect_size = 256 * KiB;
+            }
+
+            /* FIXME: how to differentiate between Intel & AMD CFI in fdt? */
+            if (!pflash_cfi01_register(reg_addr, node_name, reg_size,
+                          dinfo ? blk_by_legacy_dinfo(dinfo) : NULL,
+                          sect_size, bank_width, 0x0, 0x0, 0x0, 0x0, 0)) {
+                pr_debug("could not instantiate flash %s", node_name);
+                return NULL;
+            }
+
+            return dev;
+        }
+#endif
+        /* generic memory devices */
+        if (fdt_compat_strstr(fdt, node, "mtd-ram") == 0 ||
+            fdt_compat_strstr(fdt, node, "mmio-sram") == 0) {
+            /* TODO: add support for generic memory devices */
+        }
+
+        /* TODO: try to catch other generic / irregular devices here */
+
+        /* if all else fails, try to create a dummy device */
+        if (dev == NULL) {
+            dev = try_create_fdt_dummy_device(s, fdt, node);
+            if (dev) {
+                /* skip adding memory region for dummy device */
+                return dev;
+            }
+        }
+
+        /* no device could be instantiated */
+        if (dev == NULL) {
+            return NULL;
+        }
     }
 
     /* add memory region when reg property exists */
@@ -232,7 +551,7 @@ static DeviceState *mch_fdt_add_simple_device(DynamicState *s,
     return dev;
 }
 
-/* TODO: should we move phase 1 of mch_fdt_build_interrupt_tree here? */
+/* TODO: should we move phase 0 & 1 of mch_fdt_build_interrupt_tree here? */
 static DeviceState *mch_fdt_add_intr_controller(DynamicState *s,
                 DeviceState *parent_dev, const void *fdt, int node)
 {
@@ -400,7 +719,7 @@ static int machine_load_device_tree(const char *dtb_filename, void **fdt_ptr)
     fdt = load_device_tree(dtb_filename, &fdt_size);
     if (!fdt) {
         error_report("Error while loading device tree file '%s'",
-            dtb_filename);
+                     dtb_filename);
         return -1;
     }
 
@@ -502,14 +821,14 @@ static void mch_fdt_parse_init(MachineState *mch)
                                      "Provide value using cpu-freq property.");
                 }
                 pr_debug("No frequency found in fdt. Default to %lluMHz",
-                        freq / 1000000);
+                         freq / 1000000);
             }
 
             /* create cpu using compatible string */
             s->cpu[idx] = cpu_create(cpu_type);
             if (!s->cpu[idx]) {
                 /* try stripping manufacturer from cpu type */
-                const char *cpu_type_model = strip_compat_string(cpu_type);
+                const char *cpu_type_model = str_strip(cpu_type, ',');
 
                 if (cpu_type_model) {
                     s->cpu[idx] = cpu_create(cpu_type_model);
@@ -529,9 +848,8 @@ static void mch_fdt_parse_init(MachineState *mch)
 
     /* get system memory size */
     fdt_simple_addr_size(fdt, fdt_subnode_offset(fdt, 0, FDT_NODE_MEM),
-        0, &reg_addr, &reg_size);
-    pr_debug("System Memory = %lluMB @ 0x%llx",
-                    reg_size / 1024 / 1024, reg_addr);
+                         0, &reg_addr, &reg_size);
+    pr_debug("System Memory = %lluMB @ 0x%llx", reg_size / MiB, reg_addr);
     mch->ram_size = reg_size;
     if (!mch->ram_size) {
         error_report("No memory subnode in device tree found");

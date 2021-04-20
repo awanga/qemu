@@ -1602,8 +1602,13 @@ F: hw/core/fdt-mch-clock.c
 F: hw/core/fdt-mch-gpio.c
 F: hw/core/fdt-mch-intc.c
 F: hw/core/fdt-mch-util.c
+F: hw/arm/fdt-mch.c
+F: hw/microblaze/fdt-mch.c
+F: hw/mips/fdt-mch.c
+F: hw/ppc/fdt-mch.c
 F: include/hw/fdt-mch/fdt-mch.h
-T: git https://github.com/awanga/qemu.git dtb-parser
+F: include/hw/fdt-mch/fdt-mch-internal.h
+T: git https://github.com/awanga/qemu.git fdt-parser
 
 Machine core
 M: Eduardo Habkost <ehabkost@redhat.com>

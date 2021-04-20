@@ -107,7 +107,6 @@ void mch_fdt_init_clocks(DynamicState *s, const void *fdt)
 
     /* hook up derivative clocks */
     fdt_for_each_node_with_prop(node, fdt, -1, FDT_PROP_CLOCKS) {
-        const char *node_name = fdt_get_name(fdt, node, NULL);
         Clock *target_clk = NULL;
         uint32_t phandle;
 

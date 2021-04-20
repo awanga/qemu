@@ -27,6 +27,8 @@
 
 #include "hw/fdt-mch/fdt-mch.h"
 
+const char FDT_PROP_COMPAT[] = "compatible";
+
 static int _fdt_read_cells(const fdt32_t *cells, unsigned int n,
     uint64_t *value)
 {
@@ -190,4 +192,48 @@ int fdt_node_offset_by_prop(const void *fdt, int startoffset,
     }
 
     return offset; /* error from fdt_next_node() */
+}
+
+/* find a property with a name that contains a substring */
+const void *fdt_find_property_match(const void *fdt, int node,
+                                       const char *match, int *lenp)
+{
+    int prop_offset;
+
+    fdt_for_each_property(fdt, node, prop_offset) {
+        int length;
+        const void *val;
+        const char *name, *sub;
+
+        val = fdt_getprop_by_offset(fdt, prop_offset, &name, &length);
+
+        sub = strstr(name, match);
+        if (sub != NULL) {
+            if (lenp) {
+                *lenp = length;
+            }
+            return val;
+        }
+    }
+    return NULL;
+}
+
+/* look for an exact match in compatible string */
+int fdt_compat_strstr(const void *fdt, int node, const char *match)
+{
+    unsigned i, compat_num;
+
+     /* try to instantiate "regular" device node using compatible string */
+    compat_num = fdt_stringlist_count(fdt, node, FDT_PROP_COMPAT);
+    for (i = 0; i < compat_num; i++) {
+        const char *sub = NULL;
+        const char *compat = fdt_stringlist_get(fdt, node,
+                                FDT_PROP_COMPAT, i, NULL);
+
+        sub = strstr(compat, match);
+        if (sub != NULL) {
+            return 0;
+        }
+    }
+    return -1;
 }

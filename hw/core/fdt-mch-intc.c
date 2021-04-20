@@ -43,12 +43,11 @@ qemu_irq *mch_fdt_get_cpu_irqs(CPUState *cpu, unsigned *num)
 /* setup and hookup cpu interrupts */
 void mch_fdt_intc_cpu_fixup(DynamicState *s, const void *fdt)
 {
-    FDTDevInfo *pic_info;
     uint32_t idx;
 
     /*
      * NOTE: Details of how the cpu irqs are handled are architecture
-     *       specific. We use a arch-specific hook as a HAL to get
+     *       specific. We use a arch-specific stub as a HAL to get
      *       processor interrupt signals in a target agnostic manner.
      */
     for (idx = 0; idx < s->num_cpus; idx++) {
@@ -56,14 +55,19 @@ void mch_fdt_intc_cpu_fixup(DynamicState *s, const void *fdt)
         unsigned i, offset, num;
 
         irqs = mch_fdt_get_cpu_irqs(s->cpu[idx], &num);
-        s->num_cpu_irqs = num; /* this should not change */
+        s->num_cpu_irqs = num; /* this should not change per cpu */
 
-        /* no fixup needed */
-        if (num == 0) return;
+        /* no fixup needed if no (exposed) cpu irqs */
+        if (num == 0) {
+            return;
+        }
 
-        /* extend list of cpu irqs and append new ones to the list */
+        /*
+         * extend the list of cpu irqs and append new ones
+         * for each additional cpu
+         */
         offset = num * idx;
-        if (!s->cpu_irqs) {
+        if (idx == 0) {
             s->cpu_irqs = g_new0(qemu_irq, num);
         } else {
             s->cpu_irqs = g_renew(qemu_irq, s->cpu_irqs, offset + num);
@@ -73,35 +77,6 @@ void mch_fdt_intc_cpu_fixup(DynamicState *s, const void *fdt)
         }
 
         g_free(irqs);
-    }
-
-    /* connect the CPU irqs to the parent interrupt controller */
-    if (fdt_getprop_cell(fdt, 0, "interrupt-parent",
-                         &idx) < 0) {
-        /*
-         * found CPU irqs, but no global interrupt parent
-         * node found, so we can't connect interrupts properly
-         */
-        error_report("Expected to find parent interrupt controller "
-                     "for cpus in device tree, but none found. Device "
-                     "tree may not be valid. Cannot build functional "
-                     "interrupt tree.");
-        exit(1);
-    }
-    pic_info = mch_fdt_dev_find_mapping(s,
-                                        fdt_node_offset_by_phandle(fdt, idx));
-    if (pic_info == NULL)
-    {
-        /* found parent irq controller, but it failed to instantiate */
-        error_report("Unable to instantiate parent interrupt controller "
-                     "for cpu(s). Cannot build functional interrupt tree.");
-        exit(1);
-    }
-
-    /* cpus irqs are implicitly connected to "root" interrupt controller */
-    for (idx = 0; idx < s->num_cpus * s->num_cpu_irqs; idx++) {
-        sysbus_connect_irq(SYS_BUS_DEVICE(pic_info->dev), idx,
-                           s->cpu_irqs[idx]);
     }
 
     /* source interrupts will be connected when interrupt tree is generated */
@@ -130,17 +105,54 @@ static int mch_fdt_intc_get_parent_node(const void *fdt, int node)
 
 void mch_fdt_intc_build_tree(DynamicState *s, const void *fdt)
 {
+    FDTDevInfo *info;
     int node;
+    uint32_t idx;
 
     pr_debug("Building interrupt tree...");
 
+    /* phase 0: connect the CPU irqs to the parent interrupt controller */
+    if (fdt_getprop_cell(fdt, 0, "interrupt-parent",
+                         &idx) < 0) {
+        /*
+         * found CPU irqs, but no global interrupt parent
+         * node found, so we can't connect interrupts properly
+         */
+        error_report("Expected to find parent interrupt controller "
+                     "for cpus in device tree, but none found. Device "
+                     "tree may not be valid. Cannot build functional "
+                     "interrupt tree.");
+        exit(1);
+    } else {
+        node = fdt_node_offset_by_phandle(fdt, idx);
+        info = mch_fdt_dev_find_mapping(s, node);
+        if (info == NULL) {
+            const char *node_name = fdt_get_name(fdt, node, NULL);
+
+            /* found parent irq controller, but it failed to instantiate */
+            error_report("Unable to instantiate parent interrupt controller %s "
+                         "for cpu(s). Cannot build functional interrupt tree.",
+                         node_name);
+            exit(1);
+        }
+        pr_debug("found parent interrupt controller %s",
+                 fdt_get_name(fdt, node, NULL));
+    }
+
+    /* cpus irqs are implicitly connected to "root" interrupt controller */
+    for (idx = 0; idx < s->num_cpus * s->num_cpu_irqs; idx++) {
+        sysbus_connect_irq(SYS_BUS_DEVICE(info->dev), idx, s->cpu_irqs[idx]);
+    }
+    pr_debug("connected %u cpu irqs to %s", idx, fdt_get_name(fdt, node, NULL));
+
+    /* phase 1: iterate over all interrupt controllers */
     fdt_for_each_node_with_prop(node, fdt, -1, "interrupt-controller") {
         const char *node_name = fdt_get_name(fdt, node, NULL);
-        FDTDevInfo *info = mch_fdt_dev_find_mapping(s, node);
         unsigned cnt = 0, num_intr_cell = 0;
         int offset;
 
         /* don't hook up controllers that were not instantiated */
+        info = mch_fdt_dev_find_mapping(s, node);
         if (info) {
             if (!info->dev) {
                 continue;
@@ -149,12 +161,10 @@ void mch_fdt_intc_build_tree(DynamicState *s, const void *fdt)
             continue;
         }
 
-        /* pr_debug("Scanning for children of %s...", node_name); */
-
         /* get number of elements in interrupts specifier */
         fdt_getprop_cell(fdt, node, "#interrupt-cells", &num_intr_cell);
 
-        /* phase 1: find the max number of interrupts for the controller */
+        /* find the max number of interrupts for each controller */
         fdt_for_each_node_with_prop(offset, fdt, -1, "interrupts") {
             int intc = mch_fdt_intc_get_parent_node(fdt, offset);
             uint32_t irq;
@@ -162,20 +172,24 @@ void mch_fdt_intc_build_tree(DynamicState *s, const void *fdt)
             if (intc != node) {
                 continue;
             }
-            fdt_getprop_array_u32(fdt, node, "interrupts",
+            fdt_getprop_array_u32(fdt, offset, "interrupts",
                                (num_intr_cell == 3) ? 1 : 0, &irq);
-            info->num_irqs = MAX(info->num_irqs, irq);
+            info->num_irqs = MAX(info->num_irqs, irq + 1);
             cnt++;
         }
 
-        /*
-         * FIXME: common interrupt controllers like arm-gic have more than
-         *        one type of IRQ. we should support this ASAP.
-         */
-
         /* there should be the same or more irqs available than assigned */
         g_assert(cnt <= info->num_irqs);
-        pr_debug("* Found %u irqs for intc %s", info->num_irqs, node_name);
+        pr_debug("* Detected %u irqs for intc %s", info->num_irqs, node_name);
+
+        /*
+         * FIXME: Common interrupt controllers like arm-gic have more than
+         *        one type of IRQ. We should support this, but we need a
+         *        foolproof way to get the number of interrupts supported
+         *        by the controller (so 0 to n-1 for irq type "0", n to 2n-1
+         *        for irq type "1", and so on). For now, most fdt blobs in
+         *        practice are irq type "0", so for most cases this will work.
+         */
 
         /* phase 2: allocate and initialize irqs */
         info->irqs = g_new0(qemu_irq, info->num_irqs);
@@ -183,7 +197,7 @@ void mch_fdt_intc_build_tree(DynamicState *s, const void *fdt)
             info->irqs[cnt] = qdev_get_gpio_in(info->dev, cnt);
         }
 
-        /* phase 3: connect the devices to the right irq */
+        /* connect the devices to the right irq */
         fdt_for_each_node_with_prop(offset, fdt, -1, "interrupts") {
             const char *child_name = fdt_get_name(fdt, offset, NULL);
             int intc = mch_fdt_intc_get_parent_node(fdt, offset);
@@ -193,12 +207,13 @@ void mch_fdt_intc_build_tree(DynamicState *s, const void *fdt)
             if (intc != node) {
                 continue;
             }
+
             child_info = mch_fdt_dev_find_mapping(s, node);
             if (!child_info) {
                 continue;
             }
 
-            fdt_getprop_array_u32(fdt, node, "interrupts",
+            fdt_getprop_array_u32(fdt, offset, "interrupts",
                                (num_intr_cell == 3) ? 1 : 0, &irq);
 
             pr_debug("* Connecting device %s to irq %u", child_name, irq);
@@ -206,5 +221,10 @@ void mch_fdt_intc_build_tree(DynamicState *s, const void *fdt)
                                0, info->irqs[irq]);
         }
     }
+
+    /* phase 3: look for interrupt maps (implicit interrupt controllers) */
+    fdt_for_each_node_with_prop(node, fdt, -1, "interrupt-map") {
+    }
+
     pr_debug("Finished building interrupt tree");
 }

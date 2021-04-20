@@ -14,6 +14,7 @@
 #include <libfdt.h>
 
 #include "qemu/queue.h"
+#include "sysemu/blockdev.h"
 #include "hw/clock.h"
 #include "hw/core/cpu.h"
 
@@ -57,11 +58,17 @@ typedef struct {
 
     const char *model_name;
 
+    unsigned drive_count[IF_COUNT];
+
     /* mapping used to build machine at runtime */
     QSLIST_HEAD(, FDTDevInfo) dev_map;
 
 } DynamicState;
 
+/* common fdt node/property names */
+extern const char FDT_PROP_COMPAT[]; /* "compatible" */
+
+/* prototypes */
 void mch_fdt_init_clocks(DynamicState *s, const void *fdt);
 void mch_fdt_link_clocks(DynamicState *s, DeviceState *dev,
                          const void *fdt, int node);
@@ -102,16 +109,13 @@ static inline FDTDevInfo *mch_fdt_dev_find_mapping(DynamicState *s, int node)
     return NULL;
 }
 
-/* libfdt defines and extensions */
-int fdt_simple_addr_size(const void *fdt, int nodeoffset, unsigned idx,
-             uint64_t *addrp, uint64_t *sizep);
-
-int fdt_getprop_array_cell(const void *fdt, int nodeoffset, const char *prop,
-                           const unsigned stride, unsigned row, unsigned idx,
-                           uint32_t *val);
-
-int fdt_node_offset_by_prop(const void *fdt, int startoffset,
-                            const char *propname);
+/* iterate over each property in a node */
+#ifndef fdt_for_each_property
+#define fdt_for_each_property(fdt, node, property) \
+    for (property = fdt_first_property_offset(fdt, node); \
+         property >= 0; \
+         property = fdt_next_property_offset(fdt, property))
+#endif
 
 /* iterate over each property group in a node */
 #define fdt_for_each_cell_array(row, fdt, node, prop, stride) \
@@ -130,6 +134,22 @@ int fdt_node_offset_by_prop(const void *fdt, int startoffset,
     for (offset = fdt_node_offset_by_prop(fdt, startoffset, propname); \
          offset >= 0; \
          offset = fdt_node_offset_by_prop(fdt, offset, propname))
+
+/* libfdt defines and extensions */
+int fdt_simple_addr_size(const void *fdt, int nodeoffset, unsigned idx,
+             uint64_t *addrp, uint64_t *sizep);
+
+int fdt_getprop_array_cell(const void *fdt, int nodeoffset, const char *prop,
+                           const unsigned stride, unsigned row, unsigned idx,
+                           uint32_t *val);
+
+int fdt_node_offset_by_prop(const void *fdt, int startoffset,
+                            const char *propname);
+
+const void *fdt_find_property_match(const void *fdt, int node,
+                            const char *match, int *lenp);
+
+int fdt_compat_strstr(const void *fdt, int node, const char *match);
 
 /* helper to read array of u32 cells and/or check array index */
 static inline int fdt_getprop_array_u32(const void *fdt, int node,
@@ -190,10 +210,10 @@ static inline int fdt_getprop_long(const void *fdt, int node,
     return 0;
 }
 
-/* helper function to strip manufacturer from compatibility string */
-static inline const char *strip_compat_string(const char *s1)
+/* helper function to strip everything before given character */
+static inline const char *str_strip(const char *s1, const char ch)
 {
-    const char *s = strchr(s1, ',');
+    const char *s = strchr(s1, ch);
 
     if (s == NULL) {
         return s1;
